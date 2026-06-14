@@ -76,7 +76,7 @@ Release automation runs on pushes to `main`:
 
 ## Sparkle Stage 9
 
-Sparkle is intentionally stage 9. The app links Sparkle and exposes a Check for Updates action. The checked-in app contains the public EDDSA key; the private key is stored in the local Keychain under the `bright-here` account and must be configured in release automation before public distribution.
+Sparkle is intentionally stage 9. The app links Sparkle and exposes a Check for Updates action. The checked-in app contains the public EDDSA key; release automation signs the appcast with the `SPARKLE_PRIVATE_KEY` GitHub Actions secret.
 
 ```sh
 Scripts/generate_appcast.sh

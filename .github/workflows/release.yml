@@ -35,8 +35,7 @@ jobs:
         run: |
           if [ -n "$SPARKLE_PRIVATE_KEY" ]; then
             printf '%s' "$SPARKLE_PRIVATE_KEY" > /tmp/bright-here-sparkle-private-key
-            .build/artifacts/sparkle/Sparkle/bin/generate_keys --account bright-here -f /tmp/bright-here-sparkle-private-key
-            bash Scripts/generate_appcast.sh
+            SPARKLE_ED_KEY_FILE=/tmp/bright-here-sparkle-private-key bash Scripts/generate_appcast.sh
           else
             echo "Skipping Sparkle appcast: SPARKLE_PRIVATE_KEY is not configured."
           fi
