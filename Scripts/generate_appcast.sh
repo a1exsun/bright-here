@@ -15,3 +15,4 @@ rm -f "$ROOT_DIR/release/appcast.xml"
   --account bright-here \
   --download-url-prefix "https://github.com/a1exsun/bright-here/releases/download/v$VERSION/" \
   "$ROOT_DIR/release"
+cp "$ROOT_DIR/release/appcast.xml" "$ROOT_DIR/release/appcast"

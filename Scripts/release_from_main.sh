@@ -7,8 +7,8 @@ TAG="v$VERSION"
 ZIP_PATH="$ROOT_DIR/release/BrightHere-$VERSION.zip"
 
 ASSETS=("$ZIP_PATH")
-if [[ -f "$ROOT_DIR/release/appcast.xml" ]]; then
-  ASSETS+=("$ROOT_DIR/release/appcast.xml")
+if [[ -f "$ROOT_DIR/release/appcast" ]]; then
+  ASSETS+=("$ROOT_DIR/release/appcast")
 fi
 
 if git ls-remote --exit-code --tags origin "$TAG" >/dev/null 2>&1; then

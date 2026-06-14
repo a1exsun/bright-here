@@ -29,7 +29,7 @@
     <key>SUEnableInstallerLauncherService</key>
     <true/>
     <key>SUFeedURL</key>
-    <string>https://github.com/a1exsun/bright-here/releases/latest/download/appcast.xml</string>
+    <string>https://github.com/a1exsun/bright-here/releases/latest/download/appcast</string>
     <key>SUPublicEDKey</key>
     <string>kkdE+rygoovJu4BD+qlOouqadsueR+Tor5KZoDleu3Q=</string>
 </dict>
