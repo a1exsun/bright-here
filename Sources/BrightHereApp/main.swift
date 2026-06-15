@@ -69,10 +69,25 @@ final class AppModel: ObservableObject {
             settings.launchAtLogin = LoginItemController.isEnabled
         }
     }
+
+    func setShowMenuBarIcon(_ enabled: Bool) {
+        if !enabled, coordinator?.confirmHidingMenuBarIcon() == false {
+            settings.showMenuBarIcon = true
+            return
+        }
+
+        settings.showMenuBarIcon = enabled
+        save()
+    }
+
+    func quit() {
+        coordinator?.quit()
+    }
 }
 
 @MainActor
 final class AppCoordinator: NSObject, NSApplicationDelegate {
+    private static let showSettingsNotification = Notification.Name("dev.xsun.brighthere.showSettings")
     private let store = UserDefaultsSettingsStore()
     private let displayProvider = CoreGraphicsDisplayProvider()
     private let pointerLocator = CoreGraphicsPointerLocator()
@@ -94,7 +109,13 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        if Self.requestExistingInstanceToShowSettingsIfNeeded() {
+            NSApp.terminate(nil)
+            return
+        }
+
         model = AppModel(store: store, coordinator: self)
+        observeShowSettingsRequests()
         log.info("App launched version=\(Self.appVersion) macOS=\(Self.macOSVersion)")
         log.info("Accessibility trusted=\(PermissionController.isAccessibilityTrusted)")
         updater.start()
@@ -127,6 +148,20 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
 
     func checkForUpdates() {
         updater.checkForUpdates()
+    }
+
+    func confirmHidingMenuBarIcon() -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "Hide Menu Bar Icon?"
+        alert.informativeText = "Bright Here will keep running in the background. To reopen settings or quit later, launch Bright Here again from Applications, Launchpad, or Spotlight."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Hide Icon")
+        alert.addButton(withTitle: "Keep Icon")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    func quit() {
+        NSApp.terminate(nil)
     }
 
     func showDebugWindow() {
@@ -305,6 +340,41 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
 
     @objc private func quitFromMenu() {
         NSApp.terminate(nil)
+    }
+
+    @objc private func showSettingsFromDistributedNotification(_ notification: Notification) {
+        showSettingsWindow()
+    }
+
+    private func observeShowSettingsRequests() {
+        DistributedNotificationCenter.default().addObserver(
+            self,
+            selector: #selector(showSettingsFromDistributedNotification),
+            name: Self.showSettingsNotification,
+            object: nil
+        )
+    }
+
+    private static func requestExistingInstanceToShowSettingsIfNeeded() -> Bool {
+        guard let bundleIdentifier = Bundle.main.bundleIdentifier else {
+            return false
+        }
+
+        let currentPID = ProcessInfo.processInfo.processIdentifier
+        let hasExistingInstance = NSRunningApplication
+            .runningApplications(withBundleIdentifier: bundleIdentifier)
+            .contains { $0.processIdentifier != currentPID }
+
+        if hasExistingInstance {
+            DistributedNotificationCenter.default().postNotificationName(
+                showSettingsNotification,
+                object: nil,
+                userInfo: nil,
+                deliverImmediately: true
+            )
+        }
+
+        return hasExistingInstance
     }
 
     private static var appVersion: String {
@@ -542,7 +612,12 @@ struct SettingsView: View {
                 Text(model.runtimeStatus)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
                 Spacer()
+                Button("Quit Bright Here") {
+                    model.quit()
+                }
                 Text(appVersionText)
                     .font(.footnote)
                     .foregroundStyle(.tertiary)
@@ -659,7 +734,10 @@ struct SettingsView: View {
                 get: { model.settings.launchAtLogin },
                 set: { model.setLaunchAtLogin($0) }
             ))
-            Toggle("Show menu bar icon", isOn: binding(\.showMenuBarIcon))
+            Toggle("Show menu bar icon", isOn: Binding(
+                get: { model.settings.showMenuBarIcon },
+                set: { model.setShowMenuBarIcon($0) }
+            ))
 
             HStack {
                 Text("Step")
