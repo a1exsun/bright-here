@@ -13,16 +13,16 @@ struct IssueReporterTests {
 
         #expect(url.absoluteString.hasPrefix("https://github.com/a1exsun/bright-here/issues/new?"))
         #expect(query.first(where: { $0.name == "title" })?.value == IssueReporter.defaultTitle)
-        #expect(query.first(where: { $0.name == "body" })?.value?.contains("Debug details") == true)
+        #expect(query.first(where: { $0.name == "body" })?.value?.contains("Symptoms") == true)
+        #expect(query.first(where: { $0.name == "body" })?.value?.contains("Paste them below") == true)
     }
 
-    @Test("markdown includes pointer and log details")
-    func markdownIncludesDiagnostics() {
-        let markdown = IssueReporter.markdown(context: context())
+    @Test("clipboard text returns only recent error logs")
+    func clipboardTextReturnsErrorLogs() {
+        let markdown = IssueReporter.clipboardText(context: context())
 
-        #expect(markdown.contains("Bright Here version: 0.1.0"))
-        #expect(markdown.contains("Pointer location: 42.0, 24.0"))
         #expect(markdown.contains("display route failed"))
+        #expect(!markdown.contains("normal startup"))
     }
 }
 
@@ -51,6 +51,9 @@ private func context() -> IssueReportContext {
                 DisplaySnapshot(display: display, brightness: 0.5, containsPointer: true)
             ]
         ),
-        recentLog: "display route failed"
+        recentErrorLog: """
+        2026-06-15T00:00:00.000Z ERROR display route failed
+        2026-06-15T00:00:01.000Z INFO normal startup
+        """
     )
 }

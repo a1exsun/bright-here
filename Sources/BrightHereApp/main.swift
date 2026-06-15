@@ -80,7 +80,9 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
     private let locator = DisplayLocator()
     private let decoder = SystemDefinedEventDecoder()
     private let log = AppLog()
-    private let updater = SparkleUpdateController()
+    private lazy var updater = SparkleUpdateController(log: log) { [weak self] status in
+        self?.model?.runtimeStatus = status
+    }
 
     private var model: AppModel!
     private var settingsWindow: NSWindow?
@@ -95,6 +97,7 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         model = AppModel(store: store, coordinator: self)
         log.info("App launched version=\(Self.appVersion) macOS=\(Self.macOSVersion)")
         log.info("Accessibility trusted=\(PermissionController.isAccessibilityTrusted)")
+        updater.start()
         settingsDidChange(model.settings)
         startEventTap()
 
@@ -170,14 +173,14 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
             permissionStatus: model.permissionStatus,
             runtimeStatus: model.runtimeStatus,
             pointerDiagnostics: diagnostics,
-            recentLog: log.recentLogText()
+            recentErrorLog: log.recentErrorLogText()
         )
 
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(IssueReporter.markdown(context: context), forType: .string)
+        NSPasteboard.general.setString(IssueReporter.clipboardText(context: context), forType: .string)
         NSWorkspace.shared.open(IssueReporter.issueURL(context: context))
-        model.runtimeStatus = "Debug report copied. Paste it into the GitHub issue if needed."
-        log.info("Opened GitHub issue URL and copied debug report")
+        model.runtimeStatus = "Recent error logs copied. Paste them into the GitHub issue if needed."
+        log.info("Opened GitHub issue URL and copied recent error logs")
     }
 
     private func startEventTap() {
@@ -390,6 +393,10 @@ final class AppLog {
     func recentLogText() -> String {
         writer.recentLogText(maxBytes: 64 * 1024)
     }
+
+    func recentErrorLogText() -> String {
+        writer.recentErrorLogText(maxBytes: 64 * 1024)
+    }
 }
 
 enum PermissionController {
@@ -429,15 +436,62 @@ enum LoginItemController {
 }
 
 @MainActor
-final class SparkleUpdateController {
-    private let updaterController = SPUStandardUpdaterController(
+final class SparkleUpdateController: NSObject, SPUUpdaterDelegate {
+    private let log: AppLog
+    private let statusHandler: (String) -> Void
+    private lazy var updaterController = SPUStandardUpdaterController(
         startingUpdater: false,
-        updaterDelegate: nil,
+        updaterDelegate: self,
         userDriverDelegate: nil
     )
 
+    init(log: AppLog, statusHandler: @escaping (String) -> Void) {
+        self.log = log
+        self.statusHandler = statusHandler
+        super.init()
+    }
+
+    func start() {
+        updaterController.startUpdater()
+        log.info("Sparkle updater started")
+    }
+
     func checkForUpdates() {
+        guard updaterController.updater.canCheckForUpdates else {
+            statusHandler("Update check unavailable")
+            log.error("Manual update check unavailable")
+            let alert = NSAlert()
+            alert.messageText = "Update Check Unavailable"
+            alert.informativeText = "Bright Here is already checking for updates, or the updater is not ready yet. Try again in a moment."
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            return
+        }
+
+        statusHandler("Checking for updates...")
+        log.info("Manual update check requested")
         updaterController.checkForUpdates(nil)
+    }
+
+    func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
+        statusHandler("Update found: \(item.displayVersionString)")
+        log.info("Sparkle found update version=\(item.versionString) displayVersion=\(item.displayVersionString)")
+    }
+
+    func updaterDidNotFindUpdate(_ updater: SPUUpdater, error: Error) {
+        statusHandler("Bright Here is up to date")
+        log.info("Sparkle did not find update: \(error.localizedDescription)")
+    }
+
+    func updater(_ updater: SPUUpdater, failedToDownloadUpdate item: SUAppcastItem, error: Error) {
+        statusHandler("Update download failed")
+        log.error("Sparkle failed to download update version=\(item.versionString): \(error.localizedDescription)")
+    }
+
+    func updater(_ updater: SPUUpdater, didAbortWithError error: Error) {
+        statusHandler("Update check failed")
+        log.error("Sparkle update check failed: \(error.localizedDescription)")
     }
 }
 

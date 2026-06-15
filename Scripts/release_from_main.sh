@@ -15,7 +15,15 @@ if [[ -f "$ROOT_DIR/release/appcast" ]]; then
   ASSETS+=("$ROOT_DIR/release/appcast")
 fi
 
-RELEASE_NOTES="## Install
+RELEASE_NOTES="## What's Changed
+
+- Start Sparkle's updater during app launch so manual update checks can show the standard update UI and install available updates.
+- Show a clear local message if update checking is temporarily unavailable.
+- Log manual update checks, found updates, download failures, and update errors.
+- Make issue reports generic instead of pointer-specific.
+- Copy only recent \`ERROR\` log lines to the clipboard for issue reports.
+
+## Install
 
 Download \`BrightHere-$VERSION.dmg\`, open it, then drag \`Bright Here.app\` to Applications.
 

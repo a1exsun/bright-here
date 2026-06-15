@@ -3,6 +3,7 @@ import Foundation
 public protocol LogWriting {
     func append(_ message: String)
     func recentLogText(maxBytes: Int) -> String
+    func recentErrorLogText(maxBytes: Int) -> String
 }
 
 public final class LogFileWriter: LogWriting {
@@ -57,6 +58,21 @@ public final class LogFileWriter: LogWriting {
         lock.lock()
         defer { lock.unlock() }
 
+        return recentLogTextLocked(maxBytes: maxBytes)
+    }
+
+    public func recentErrorLogText(maxBytes: Int = 64 * 1024) -> String {
+        lock.lock()
+        defer { lock.unlock() }
+
+        let text = recentLogTextLocked(maxBytes: maxBytes)
+        return text
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .filter { $0.contains(" ERROR ") }
+            .joined(separator: "\n")
+    }
+
+    private func recentLogTextLocked(maxBytes: Int) -> String {
         guard let data = try? Data(contentsOf: fileURL) else {
             return ""
         }

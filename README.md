@@ -70,7 +70,7 @@ Runtime logs are written to:
 ~/Library/Logs/Bright Here/bright-here.log
 ```
 
-The settings window's **It's not working** button opens a prefilled GitHub issue and copies a fuller Markdown debug report to the clipboard. Paste that report into the issue description if the prefilled text is not enough.
+The settings window's **It's not working** button opens a prefilled GitHub issue and copies recent `ERROR` log lines to the clipboard. Paste those logs into the issue's final section if available.
 
 ## Package
 

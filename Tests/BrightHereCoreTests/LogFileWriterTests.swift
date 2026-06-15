@@ -33,4 +33,21 @@ struct LogFileWriterTests {
         #expect(writer.recentLogText(maxBytes: 1024).contains("after rotation"))
         try? FileManager.default.removeItem(at: directory)
     }
+
+    @Test("filters recent error log lines")
+    func filtersErrorLines() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let fileURL = directory.appendingPathComponent("bright-here.log")
+        let writer = LogFileWriter(fileURL: fileURL, maxBytes: 1024)
+
+        writer.append("INFO startup")
+        writer.append("ERROR failed to check updates")
+        writer.append("INFO ready")
+
+        let text = writer.recentErrorLogText(maxBytes: 1024)
+        #expect(text.contains("ERROR failed to check updates"))
+        #expect(!text.contains("INFO startup"))
+        #expect(!text.contains("INFO ready"))
+        try? FileManager.default.removeItem(at: directory)
+    }
 }
