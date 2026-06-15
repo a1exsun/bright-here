@@ -76,6 +76,7 @@ The settings window's **It's not working** button opens a prefilled GitHub issue
 
 ```sh
 bash Scripts/package_app.sh
+bash Scripts/create_dmg.sh
 ```
 
 This creates:
@@ -83,9 +84,10 @@ This creates:
 ```text
 release/Bright Here.app
 release/BrightHere-<version>.zip
+release/BrightHere-<version>.dmg
 ```
 
-The script ad-hoc signs locally by default. CI can use `SIGN_IDENTITY` and Apple notarization secrets when configured.
+The zip is used for Sparkle updates. The DMG is the recommended user-facing installer: open it and drag `Bright Here.app` to Applications. The scripts ad-hoc sign locally by default. CI can use `SIGN_IDENTITY` and Apple notarization secrets when configured.
 
 ## GitHub Release Automation
 
@@ -96,8 +98,10 @@ Release automation runs on pushes to `main`:
 1. resolve packages
 2. run tests
 3. package the app
-4. notarize if Apple credentials are configured
-5. create a GitHub Release for `v$(cat VERSION)` if that tag does not already exist
+4. notarize the zip if Apple credentials are configured
+5. generate the Sparkle appcast
+6. create and optionally notarize the DMG
+7. create a GitHub Release for `v$(cat VERSION)` if that tag does not already exist
 
 ## Sparkle Stage 9
 

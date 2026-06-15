@@ -6,15 +6,22 @@ if [[ -z "${APPLE_ID:-}" || -z "${APPLE_TEAM_ID:-}" || -z "${APPLE_APP_PASSWORD:
   exit 0
 fi
 
-ZIP_PATH="${1:?Usage: Scripts/notarize_app.sh path/to/BrightHere.zip}"
+SUBMISSION_PATH="${1:?Usage: Scripts/notarize_app.sh path/to/BrightHere.zip-or-dmg}"
 
-xcrun notarytool submit "$ZIP_PATH" \
+xcrun notarytool submit "$SUBMISSION_PATH" \
   --apple-id "$APPLE_ID" \
   --team-id "$APPLE_TEAM_ID" \
   --password "$APPLE_APP_PASSWORD" \
   --wait
 
-APP_DIR="$(dirname "$ZIP_PATH")/Bright Here.app"
-if [[ -d "$APP_DIR" ]]; then
-  xcrun stapler staple "$APP_DIR"
-fi
+case "$SUBMISSION_PATH" in
+  *.dmg)
+    xcrun stapler staple "$SUBMISSION_PATH"
+    ;;
+  *)
+    APP_DIR="$(dirname "$SUBMISSION_PATH")/Bright Here.app"
+    if [[ -d "$APP_DIR" ]]; then
+      xcrun stapler staple "$APP_DIR"
+    fi
+    ;;
+esac

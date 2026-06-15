@@ -19,8 +19,12 @@ jobs:
         run: swift build -c release
       - name: Package app
         run: bash Scripts/package_app.sh
+      - name: Create DMG
+        run: bash Scripts/create_dmg.sh
       - name: Upload app artifact
         uses: actions/upload-artifact@v4
         with:
           name: BrightHere
-          path: release/BrightHere-*.zip
+          path: |
+            release/BrightHere-*.zip
+            release/BrightHere-*.dmg
