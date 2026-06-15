@@ -41,29 +41,21 @@ public enum IssueReporter {
     public static func shortBody(context: IssueReportContext) -> String {
         """
         ## Defect title
-        Replace this with a short title.
+        > Replace this with a short title.
 
         ## Symptoms
-        What did you see? What did not work?
+        > What did you see? What did not work?
 
         ## Expected behavior
-        What did you expect Bright Here to do?
+        > What did you expect Bright Here to do?
 
         ## Steps to reproduce
-        1.
-        2.
-        3.
+        > 1.
+        > 2.
+        > 3.
 
-        ## Environment
-        - Bright Here version: \(context.version)
-        - macOS version: \(context.macOSVersion)
-        - Permission status: \(context.permissionStatus)
-        - Runtime status: \(context.runtimeStatus)
-        - Pointer location: \(DiagnosticsFormatter.point(context.pointerDiagnostics.pointerLocation))
-        - Selected display: \(selectedDisplaySummary(context.pointerDiagnostics.selectedDisplay))
-
-        ## Error logs
-        Bright Here copied recent ERROR log lines to your clipboard. Paste them below if available.
+        ### Error Logs
+        > Bright Here copied environment details and recent ERROR log lines to your clipboard. Paste them below if available.
         """
     }
 
@@ -72,7 +64,22 @@ public enum IssueReporter {
             .split(separator: "\n", omittingEmptySubsequences: false)
             .filter { $0.contains(" ERROR ") || $0.hasPrefix("ERROR ") }
             .joined(separator: "\n")
-        return errors.isEmpty ? "No recent ERROR log lines found." : errors
+        let errorText = errors.isEmpty ? "No recent ERROR log lines found." : errors
+
+        return """
+        ```text
+        Environment
+        - Bright Here version: \(context.version)
+        - macOS version: \(context.macOSVersion)
+        - Permission status: \(context.permissionStatus)
+        - Runtime status: \(context.runtimeStatus)
+        - Pointer location: \(DiagnosticsFormatter.point(context.pointerDiagnostics.pointerLocation))
+        - Selected display: \(selectedDisplaySummary(context.pointerDiagnostics.selectedDisplay))
+
+        Error Logs
+        \(errorText)
+        ```
+        """
     }
 
     private static func selectedDisplaySummary(_ display: ManagedDisplay?) -> String {

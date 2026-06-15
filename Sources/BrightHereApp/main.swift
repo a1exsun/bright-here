@@ -543,6 +543,10 @@ struct SettingsView: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 Spacer()
+                Text(appVersionText)
+                    .font(.footnote)
+                    .foregroundStyle(.tertiary)
+                    .monospacedDigit()
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 10)
@@ -570,6 +574,15 @@ struct SettingsView: View {
             Spacer()
         }
         .padding(20)
+    }
+
+    private var appVersionText: String {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+        if let build, !build.isEmpty {
+            return "v\(version) (\(build))"
+        }
+        return "v\(version)"
     }
 
     private var systemStatus: some View {

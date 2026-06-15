@@ -17,11 +17,10 @@ fi
 
 RELEASE_NOTES="## What's Changed
 
-- Start Sparkle's updater during app launch so manual update checks can show the standard update UI and install available updates.
-- Show a clear local message if update checking is temporarily unavailable.
-- Log manual update checks, found updates, download failures, and update errors.
-- Make issue reports generic instead of pointer-specific.
-- Copy only recent \`ERROR\` log lines to the clipboard for issue reports.
+- Show the app version in the settings window.
+- Improve the issue template so guidance text is clearly formatted as quoted prompts.
+- Move environment details into the clipboard payload for issue reports.
+- Wrap copied environment and ERROR log details in a fenced text block for easier pasting.
 
 ## Install
 

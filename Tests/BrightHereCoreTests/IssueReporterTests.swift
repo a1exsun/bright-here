@@ -13,16 +13,26 @@ struct IssueReporterTests {
 
         #expect(url.absoluteString.hasPrefix("https://github.com/a1exsun/bright-here/issues/new?"))
         #expect(query.first(where: { $0.name == "title" })?.value == IssueReporter.defaultTitle)
-        #expect(query.first(where: { $0.name == "body" })?.value?.contains("Symptoms") == true)
-        #expect(query.first(where: { $0.name == "body" })?.value?.contains("Paste them below") == true)
+        let body = query.first(where: { $0.name == "body" })?.value ?? ""
+        #expect(body.contains("## Symptoms"))
+        #expect(body.contains("> What did you see?"))
+        #expect(body.contains("### Error Logs"))
+        #expect(body.contains("> Bright Here copied environment details"))
+        #expect(!body.contains("## Environment"))
     }
 
-    @Test("clipboard text returns only recent error logs")
-    func clipboardTextReturnsErrorLogs() {
-        let markdown = IssueReporter.clipboardText(context: context())
+    @Test("clipboard text returns environment and only recent error logs")
+    func clipboardTextReturnsEnvironmentAndErrorLogs() {
+        let text = IssueReporter.clipboardText(context: context())
 
-        #expect(markdown.contains("display route failed"))
-        #expect(!markdown.contains("normal startup"))
+        #expect(text.hasPrefix("```text"))
+        #expect(text.hasSuffix("```"))
+        #expect(text.contains("Environment"))
+        #expect(text.contains("Bright Here version: 0.1.0"))
+        #expect(text.contains("Selected display: #1 id=7"))
+        #expect(text.contains("Error Logs"))
+        #expect(text.contains("display route failed"))
+        #expect(!text.contains("normal startup"))
     }
 }
 
