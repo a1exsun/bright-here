@@ -11,6 +11,8 @@ final class AppModel: ObservableObject {
     @Published var settings: AppSettings
     @Published var permissionStatus: String = ""
     @Published var runtimeStatus: String = "Ready"
+    @Published var isAccessibilityTrusted = false
+    @Published var isHotkeyListenerActive = false
 
     private let store: SettingsStoring
     private weak var coordinator: AppCoordinator?
@@ -28,7 +30,12 @@ final class AppModel: ObservableObject {
     }
 
     func refreshPermissionStatus() {
-        permissionStatus = PermissionController.isAccessibilityTrusted ? "Ready" : "Accessibility permission required"
+        isAccessibilityTrusted = PermissionController.isAccessibilityTrusted
+        permissionStatus = isAccessibilityTrusted ? "Accessibility permission granted" : "Accessibility permission required"
+    }
+
+    func setHotkeyListenerActive(_ active: Bool) {
+        isHotkeyListenerActive = active
     }
 
     func openAccessibilitySettings() {
@@ -175,10 +182,13 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
 
     private func startEventTap() {
         guard !eventTapStarted else {
+            model?.setHotkeyListenerActive(true)
             return
         }
 
         guard PermissionController.isAccessibilityTrusted else {
+            model?.refreshPermissionStatus()
+            model?.setHotkeyListenerActive(false)
             model?.runtimeStatus = "Accessibility permission required"
             if !didLogMissingAccessibilityPermission {
                 didLogMissingAccessibilityPermission = true
@@ -193,10 +203,12 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         }
         if eventTap?.start() == true {
             eventTapStarted = true
+            model?.setHotkeyListenerActive(true)
             model?.runtimeStatus = "Brightness keys active"
             log.info("Event tap started")
         } else {
             eventTapStarted = false
+            model?.setHotkeyListenerActive(false)
             model?.runtimeStatus = "Could not start brightness key listener"
             log.error("Event tap failed to start")
         }
@@ -249,7 +261,7 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
             let view = SettingsView(model: model)
             let hosting = NSHostingView(rootView: view)
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 520, height: 440),
+                contentRect: NSRect(x: 0, y: 0, width: 540, height: 540),
                 styleMask: [.titled, .closable, .miniaturizable],
                 backing: .buffered,
                 defer: false
@@ -465,6 +477,7 @@ struct SettingsView: View {
             Divider()
 
             VStack(spacing: 18) {
+                systemStatus
                 controls
                 githubModule
             }
@@ -480,7 +493,10 @@ struct SettingsView: View {
             .padding(.horizontal, 20)
             .padding(.vertical, 10)
         }
-        .frame(width: 520)
+        .frame(width: 540)
+        .onAppear {
+            model.refreshPermissionStatus()
+        }
     }
 
     private var header: some View {
@@ -502,6 +518,73 @@ struct SettingsView: View {
         .padding(20)
     }
 
+    private var systemStatus: some View {
+        HStack(spacing: 12) {
+            ZStack {
+                Circle()
+                    .fill(systemStatusTint.opacity(0.16))
+                    .frame(width: 38, height: 38)
+                Image(systemName: systemStatusIcon)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(systemStatusTint)
+            }
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(systemStatusTitle)
+                    .font(.headline)
+                Text(systemStatusDetail)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            if !model.isAccessibilityTrusted {
+                Button("Open Permissions") {
+                    model.openAccessibilitySettings()
+                }
+            }
+        }
+        .padding(14)
+        .background(systemStatusTint.opacity(0.10), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(systemStatusTint.opacity(0.38))
+        )
+    }
+
+    private var systemStatusIsReady: Bool {
+        model.isAccessibilityTrusted && model.isHotkeyListenerActive
+    }
+
+    private var systemStatusTitle: String {
+        if systemStatusIsReady {
+            return "All Set"
+        }
+        if !model.isAccessibilityTrusted {
+            return "Permission Needed"
+        }
+        return "Listener Inactive"
+    }
+
+    private var systemStatusDetail: String {
+        if systemStatusIsReady {
+            return "Accessibility and F1/F2 listener are active."
+        }
+        if !model.isAccessibilityTrusted {
+            return "Accessibility permission is required before F1/F2 can be routed."
+        }
+        return "Accessibility is granted, but the F1/F2 listener is not active."
+    }
+
+    private var systemStatusIcon: String {
+        systemStatusIsReady ? "checkmark.shield.fill" : "exclamationmark.triangle.fill"
+    }
+
+    private var systemStatusTint: Color {
+        systemStatusIsReady ? .green : .orange
+    }
+
     private var controls: some View {
         VStack(alignment: .leading, spacing: 14) {
             Toggle("Enable F1/F2 brightness routing", isOn: binding(\.isEnabled))
@@ -519,20 +602,10 @@ struct SettingsView: View {
                         model.settings.brightnessStep = Float($0)
                         model.save()
                     }
-                ), in: 0.01...0.15)
-                Text("\(Int((model.settings.brightnessStep * 100).rounded()))%")
-                    .frame(width: 42, alignment: .trailing)
+                ), in: 0.005...0.08, step: 0.001)
+                Text(String(format: "%.1f%%", model.settings.brightnessStep * 100))
+                    .frame(width: 50, alignment: .trailing)
                     .monospacedDigit()
-            }
-
-            HStack {
-                Text(model.permissionStatus)
-                    .font(.footnote)
-                    .foregroundColor(PermissionController.isAccessibilityTrusted ? .secondary : .orange)
-                Spacer()
-                Button("Open Permissions") {
-                    model.openAccessibilitySettings()
-                }
             }
 
             Button("Open Debug Panel") {

@@ -1,6 +1,8 @@
 import Foundation
 
 public struct AppSettings: Codable, Equatable, Sendable {
+    public static let defaultBrightnessStep: Float = 0.03125
+
     public var isEnabled: Bool
     public var launchAtLogin: Bool
     public var showMenuBarIcon: Bool
@@ -10,7 +12,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         isEnabled: Bool = true,
         launchAtLogin: Bool = false,
         showMenuBarIcon: Bool = false,
-        brightnessStep: Float = 0.0625
+        brightnessStep: Float = Self.defaultBrightnessStep
     ) {
         self.isEnabled = isEnabled
         self.launchAtLogin = launchAtLogin
@@ -25,6 +27,8 @@ public protocol SettingsStoring {
 }
 
 public final class UserDefaultsSettingsStore: SettingsStoring {
+    private static let legacyDefaultBrightnessStep: Float = 0.0625
+
     private enum Key {
         static let isEnabled = "isEnabled"
         static let launchAtLogin = "launchAtLogin"
@@ -43,7 +47,7 @@ public final class UserDefaultsSettingsStore: SettingsStoring {
             isEnabled: defaults.object(forKey: Key.isEnabled) as? Bool ?? true,
             launchAtLogin: defaults.object(forKey: Key.launchAtLogin) as? Bool ?? false,
             showMenuBarIcon: defaults.object(forKey: Key.showMenuBarIcon) as? Bool ?? false,
-            brightnessStep: defaults.object(forKey: Key.brightnessStep) as? Float ?? 0.0625
+            brightnessStep: loadedBrightnessStep()
         )
     }
 
@@ -52,5 +56,17 @@ public final class UserDefaultsSettingsStore: SettingsStoring {
         defaults.set(settings.launchAtLogin, forKey: Key.launchAtLogin)
         defaults.set(settings.showMenuBarIcon, forKey: Key.showMenuBarIcon)
         defaults.set(settings.brightnessStep, forKey: Key.brightnessStep)
+    }
+
+    private func loadedBrightnessStep() -> Float {
+        guard let stored = defaults.object(forKey: Key.brightnessStep) as? Float else {
+            return AppSettings.defaultBrightnessStep
+        }
+
+        if abs(stored - Self.legacyDefaultBrightnessStep) < 0.0001 {
+            return AppSettings.defaultBrightnessStep
+        }
+
+        return stored
     }
 }

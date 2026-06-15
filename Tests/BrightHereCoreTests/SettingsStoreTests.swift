@@ -25,4 +25,15 @@ struct SettingsStoreTests {
 
         #expect(store.load() == expected)
     }
+
+    @Test("migrates legacy default brightness step")
+    func migratesLegacyBrightnessStep() {
+        let defaults = UserDefaults(suiteName: "BrightHereTests.legacyStep")!
+        defaults.removePersistentDomain(forName: "BrightHereTests.legacyStep")
+        defaults.set(Float(0.0625), forKey: "brightnessStep")
+
+        let settings = UserDefaultsSettingsStore(defaults: defaults).load()
+
+        #expect(settings.brightnessStep == AppSettings.defaultBrightnessStep)
+    }
 }

@@ -8,8 +8,8 @@ public enum BrightnessKeyEvent: Equatable, Sendable {
 public struct SystemDefinedEventDecoder: Sendable {
     public static let auxControlButtonSubtype = 8
     public static let keyDownState = 0x0A
-    public static let brightnessDownKeyType = 2
-    public static let brightnessUpKeyType = 3
+    public static let brightnessUpKeyType = 2
+    public static let brightnessDownKeyType = 3
 
     public init() {}
 
