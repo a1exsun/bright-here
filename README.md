@@ -24,6 +24,18 @@ swift run bright-here --show-settings
 
 The production app normally runs in the background. `--show-settings` opens the settings window during development.
 
+## Pointer Debugging
+
+Open the settings window and click **Open Debug Panel**. The panel shows:
+
+- current pointer location from `CGEvent`
+- current pointer location from `NSEvent`
+- selected display id and bounds
+- all active displays and whether each contains the pointer
+- test brightness buttons for the currently selected display
+
+The production F1/F2 routing uses `CGEvent(source: nil)?.location` at keypress time instead of the keyboard event's own location.
+
 ## CLI diagnostics
 
 ```sh
@@ -42,10 +54,23 @@ swift test
 The automated tests cover:
 
 - pointer-to-display selection
+- pointer-based brightness routing
 - brightness step clamping
 - brightness write-through behavior using a fake controller
 - F1/F2 system-defined event decoding
 - settings defaults and persistence
+- issue URL/report generation
+- log file append and rotation
+
+## Logs and Issue Reports
+
+Runtime logs are written to:
+
+```text
+~/Library/Logs/Bright Here/bright-here.log
+```
+
+The settings window's **It's not working** button opens a prefilled GitHub issue and copies a fuller Markdown debug report to the clipboard. Paste that report into the issue description if the prefilled text is not enough.
 
 ## Package
 

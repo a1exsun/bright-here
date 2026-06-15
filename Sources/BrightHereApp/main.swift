@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import BrightHereCore
+import OSLog
 import ServiceManagement
 import Sparkle
 import SwiftUI
@@ -39,6 +40,18 @@ final class AppModel: ObservableObject {
         coordinator?.checkForUpdates()
     }
 
+    func openDebugWindow() {
+        coordinator?.showDebugWindow()
+    }
+
+    func reportIssue() {
+        coordinator?.reportIssue()
+    }
+
+    func testBrightness(_ direction: BrightnessDirection) {
+        coordinator?.testBrightness(direction)
+    }
+
     func setLaunchAtLogin(_ enabled: Bool) {
         do {
             try LoginItemController.setEnabled(enabled)
@@ -55,25 +68,37 @@ final class AppModel: ObservableObject {
 final class AppCoordinator: NSObject, NSApplicationDelegate {
     private let store = UserDefaultsSettingsStore()
     private let displayProvider = CoreGraphicsDisplayProvider()
+    private let pointerLocator = CoreGraphicsPointerLocator()
     private let brightness = NativeBrightnessController()
     private let locator = DisplayLocator()
     private let decoder = SystemDefinedEventDecoder()
+    private let log = AppLog()
     private let updater = SparkleUpdateController()
 
     private var model: AppModel!
     private var settingsWindow: NSWindow?
+    private var debugWindow: NSWindow?
     private var statusItem: NSStatusItem?
     private var eventTap: EventTapController?
+    private var eventTapStarted = false
+    private var didLogMissingAccessibilityPermission = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         model = AppModel(store: store, coordinator: self)
+        log.info("App launched version=\(Self.appVersion) macOS=\(Self.macOSVersion)")
+        log.info("Accessibility trusted=\(PermissionController.isAccessibilityTrusted)")
         settingsDidChange(model.settings)
         startEventTap()
 
         if !PermissionController.isAccessibilityTrusted || CommandLine.arguments.contains("--show-settings") {
             showSettingsWindow()
         }
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        model?.refreshPermissionStatus()
+        startEventTap()
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -94,14 +119,86 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         updater.checkForUpdates()
     }
 
+    func showDebugWindow() {
+        if debugWindow == nil {
+            let view = DebugView(model: model, viewModel: DebugViewModel(
+                displayProvider: self.displayProvider,
+                pointerLocator: self.pointerLocator,
+                brightness: self.brightness
+            ))
+            let hosting = NSHostingView(rootView: view)
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 640, height: 620),
+                styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                backing: .buffered,
+                defer: false
+            )
+            window.title = "Bright Here Debug"
+            window.contentView = hosting
+            window.center()
+            window.isReleasedWhenClosed = false
+            debugWindow = window
+        }
+
+        debugWindow?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func testBrightness(_ direction: BrightnessDirection) {
+        let result = routeBrightness(direction: direction, source: "debug-test")
+        if result == nil {
+            model.runtimeStatus = "Debug test could not route brightness"
+        }
+    }
+
+    func reportIssue() {
+        let diagnostics = DiagnosticsCollector(
+            displayProvider: displayProvider,
+            pointerLocator: pointerLocator,
+            brightness: brightness
+        ).snapshot()
+        let context = IssueReportContext(
+            version: Self.appVersion,
+            macOSVersion: Self.macOSVersion,
+            permissionStatus: model.permissionStatus,
+            runtimeStatus: model.runtimeStatus,
+            pointerDiagnostics: diagnostics,
+            recentLog: log.recentLogText()
+        )
+
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(IssueReporter.markdown(context: context), forType: .string)
+        NSWorkspace.shared.open(IssueReporter.issueURL(context: context))
+        model.runtimeStatus = "Debug report copied. Paste it into the GitHub issue if needed."
+        log.info("Opened GitHub issue URL and copied debug report")
+    }
+
     private func startEventTap() {
+        guard !eventTapStarted else {
+            return
+        }
+
+        guard PermissionController.isAccessibilityTrusted else {
+            model?.runtimeStatus = "Accessibility permission required"
+            if !didLogMissingAccessibilityPermission {
+                didLogMissingAccessibilityPermission = true
+                log.error("Event tap not started: accessibility permission missing")
+            }
+            return
+        }
+        didLogMissingAccessibilityPermission = false
+
         eventTap = EventTapController { [weak self] event in
             self?.handleSystemDefinedEvent(event) ?? false
         }
         if eventTap?.start() == true {
+            eventTapStarted = true
             model?.runtimeStatus = "Brightness keys active"
+            log.info("Event tap started")
         } else {
+            eventTapStarted = false
             model?.runtimeStatus = "Could not start brightness key listener"
+            log.error("Event tap failed to start")
         }
     }
 
@@ -117,21 +214,34 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         }
 
         let direction: BrightnessDirection = keyEvent == .brightnessUp ? .up : .down
-        let point = event.location
-        let displays = displayProvider.allKnownDisplays()
-        guard let display = locator.display(containing: point, displays: displays) else {
-            model.runtimeStatus = "No display at pointer"
-            return true
-        }
-
-        let adjuster = BrightnessAdjuster(step: model.settings.brightnessStep)
-        if let result = adjuster.adjust(displayID: display.id, direction: direction, brightness: brightness) {
-            model.runtimeStatus = "\(display.friendlyName): \(Int((result.newValue * 100).rounded()))%"
-        } else {
-            model.runtimeStatus = "Could not adjust \(display.friendlyName)"
-        }
+        _ = routeBrightness(direction: direction, source: "hotkey")
 
         return true
+    }
+
+    @discardableResult
+    private func routeBrightness(direction: BrightnessDirection, source: String) -> BrightnessRoutingResult? {
+        let router = BrightnessRouter(
+            displayProvider: displayProvider,
+            pointerLocator: pointerLocator,
+            displayLocator: locator,
+            brightness: brightness
+        )
+
+        guard let result = router.route(direction: direction, step: model.settings.brightnessStep) else {
+            let point = pointerLocator.currentPointerLocation()
+            let displays = displayProvider.allKnownDisplays()
+            model.runtimeStatus = "Could not route brightness"
+            log.error("\(source) route failed direction=\(direction) pointer=\(DiagnosticsFormatter.point(point)) displays=\(displays.count)")
+            return nil
+        }
+
+        let percent = Int((result.adjustment.newValue * 100).rounded())
+        model.runtimeStatus = "\(result.display.friendlyName): \(percent)%"
+        log.info(
+            "\(source) routed direction=\(direction) pointer=\(DiagnosticsFormatter.point(result.pointerLocation)) displayID=\(result.display.id) bounds=\(DiagnosticsFormatter.rect(result.display.bounds)) old=\(result.adjustment.oldValue) new=\(result.adjustment.newValue)"
+        )
+        return result
     }
 
     private func showSettingsWindow() {
@@ -180,6 +290,14 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
 
     @objc private func quitFromMenu() {
         NSApp.terminate(nil)
+    }
+
+    private static var appVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
+    }
+
+    private static var macOSVersion: String {
+        ProcessInfo.processInfo.operatingSystemVersionString
     }
 }
 
@@ -239,6 +357,29 @@ final class EventTapController {
     }
 }
 
+final class AppLog {
+    private let logger = Logger(subsystem: "dev.xsun.brighthere", category: "runtime")
+    private let writer: LogWriting
+
+    init(writer: LogWriting = LogFileWriter()) {
+        self.writer = writer
+    }
+
+    func info(_ message: String) {
+        logger.info("\(message, privacy: .public)")
+        writer.append("INFO \(message)")
+    }
+
+    func error(_ message: String) {
+        logger.error("\(message, privacy: .public)")
+        writer.append("ERROR \(message)")
+    }
+
+    func recentLogText() -> String {
+        writer.recentLogText(maxBytes: 64 * 1024)
+    }
+}
+
 enum PermissionController {
     static var isAccessibilityTrusted: Bool {
         AXIsProcessTrusted()
@@ -285,6 +426,33 @@ final class SparkleUpdateController {
 
     func checkForUpdates() {
         updaterController.checkForUpdates(nil)
+    }
+}
+
+@MainActor
+final class DebugViewModel: ObservableObject {
+    @Published var diagnostics: PointerDiagnostics
+    @Published var nsEventMouseLocation: CGPoint = .zero
+
+    private let collector: DiagnosticsCollector
+
+    init(
+        displayProvider: DisplayProviding,
+        pointerLocator: PointerLocating,
+        brightness: BrightnessControlling
+    ) {
+        collector = DiagnosticsCollector(
+            displayProvider: displayProvider,
+            pointerLocator: pointerLocator,
+            brightness: brightness
+        )
+        diagnostics = collector.snapshot()
+        refresh()
+    }
+
+    func refresh() {
+        diagnostics = collector.snapshot()
+        nsEventMouseLocation = NSEvent.mouseLocation
     }
 }
 
@@ -366,6 +534,10 @@ struct SettingsView: View {
                     model.openAccessibilitySettings()
                 }
             }
+
+            Button("Open Debug Panel") {
+                model.openDebugWindow()
+            }
         }
         .padding(14)
         .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -386,7 +558,13 @@ struct SettingsView: View {
                 .font(.footnote)
                 .foregroundStyle(.secondary)
 
-            Link("a1exsun/bright-here", destination: URL(string: "https://github.com/a1exsun/bright-here")!)
+            HStack {
+                Link("a1exsun/bright-here", destination: URL(string: "https://github.com/a1exsun/bright-here")!)
+                Spacer()
+                Button("It's not working") {
+                    model.reportIssue()
+                }
+            }
         }
         .padding(14)
         .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -400,6 +578,128 @@ struct SettingsView: View {
                 model.save()
             }
         )
+    }
+}
+
+struct DebugView: View {
+    @ObservedObject var model: AppModel
+    @StateObject var viewModel: DebugViewModel
+    private let timer = Timer.publish(every: 0.25, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Pointer Debug")
+                        .font(.title3.weight(.semibold))
+                    Text("Move the pointer across displays and confirm the selected display changes.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Refresh") {
+                    viewModel.refresh()
+                }
+            }
+            .padding(18)
+
+            Divider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    summary
+                    testControls
+                    displayList
+                }
+                .padding(18)
+            }
+        }
+        .frame(minWidth: 620, minHeight: 560)
+        .onReceive(timer) { _ in
+            viewModel.refresh()
+        }
+    }
+
+    private var summary: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            row("CG pointer", DiagnosticsFormatter.point(viewModel.diagnostics.pointerLocation))
+            row("NSEvent pointer", DiagnosticsFormatter.point(viewModel.nsEventMouseLocation))
+            row("Selected display", selectedDisplayText)
+            row("Runtime", model.runtimeStatus)
+        }
+        .padding(12)
+        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private var selectedDisplayText: String {
+        guard let display = viewModel.diagnostics.selectedDisplay else {
+            return "n/a"
+        }
+        return "#\(display.index) id=\(display.id) \(DiagnosticsFormatter.rect(display.bounds)) \(display.roleDescription)"
+    }
+
+    private var testControls: some View {
+        HStack {
+            Button("Test -") {
+                model.testBrightness(.down)
+                viewModel.refresh()
+            }
+            Button("Test +") {
+                model.testBrightness(.up)
+                viewModel.refresh()
+            }
+            Spacer()
+            Text("Uses current CG pointer and native brightness API.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(12)
+        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private var displayList: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Displays")
+                .font(.headline)
+
+            ForEach(viewModel.diagnostics.displays, id: \.display.id) { snapshot in
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack {
+                        Text(snapshot.display.friendlyName)
+                            .font(.subheadline.weight(.semibold))
+                        Spacer()
+                        if snapshot.display.id == viewModel.diagnostics.selectedDisplay?.id {
+                            Text("selected")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.green)
+                        }
+                    }
+                    row("id", "\(snapshot.display.id)")
+                    row("bounds", DiagnosticsFormatter.rect(snapshot.display.bounds))
+                    row("brightness", DiagnosticsFormatter.brightness(snapshot.brightness))
+                    row("contains CG pointer", snapshot.containsPointer ? "yes" : "no")
+                    row("roles", snapshot.display.roleDescription.isEmpty ? "n/a" : snapshot.display.roleDescription)
+                }
+                .padding(12)
+                .background(.background, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(snapshot.display.id == viewModel.diagnostics.selectedDisplay?.id ? .green : .secondary.opacity(0.25))
+                )
+            }
+        }
+    }
+
+    private func row(_ title: String, _ value: String) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(title)
+                .foregroundStyle(.secondary)
+                .frame(width: 140, alignment: .leading)
+            Text(value)
+                .textSelection(.enabled)
+            Spacer()
+        }
+        .font(.system(.body, design: .monospaced))
     }
 }
 
