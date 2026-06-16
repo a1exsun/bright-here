@@ -25,7 +25,8 @@ struct SettingsStoreTests {
             showMenuBarIcon: true,
             showBrightnessOverlay: false,
             autoUpdateEnabled: false,
-            brightnessStep: 0.1
+            brightnessStep: 0.1,
+            brightnessControlMode: .gamma
         )
 
         store.save(expected)
@@ -51,6 +52,16 @@ struct SettingsStoreTests {
         let settings = UserDefaultsSettingsStore(defaults: defaults).load()
 
         #expect(settings.autoUpdateEnabled)
+    }
+
+    @Test("defaults brightness control mode to system")
+    func defaultsBrightnessControlModeToSystem() {
+        let defaults = UserDefaults(suiteName: "BrightHereTests.controlModeDefault")!
+        defaults.removePersistentDomain(forName: "BrightHereTests.controlModeDefault")
+
+        let settings = UserDefaultsSettingsStore(defaults: defaults).load()
+
+        #expect(settings.brightnessControlMode == .system)
     }
 
     @Test("migrates legacy default brightness step")

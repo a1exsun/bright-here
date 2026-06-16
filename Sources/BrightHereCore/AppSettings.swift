@@ -9,6 +9,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var showBrightnessOverlay: Bool
     public var autoUpdateEnabled: Bool
     public var brightnessStep: Float
+    public var brightnessControlMode: BrightnessControlMode
 
     public init(
         isEnabled: Bool = true,
@@ -16,7 +17,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
         showMenuBarIcon: Bool = false,
         showBrightnessOverlay: Bool = true,
         autoUpdateEnabled: Bool = true,
-        brightnessStep: Float = Self.defaultBrightnessStep
+        brightnessStep: Float = Self.defaultBrightnessStep,
+        brightnessControlMode: BrightnessControlMode = .system
     ) {
         self.isEnabled = isEnabled
         self.launchAtLogin = launchAtLogin
@@ -24,6 +26,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.showBrightnessOverlay = showBrightnessOverlay
         self.autoUpdateEnabled = autoUpdateEnabled
         self.brightnessStep = brightnessStep
+        self.brightnessControlMode = brightnessControlMode
     }
 }
 
@@ -42,6 +45,7 @@ public final class UserDefaultsSettingsStore: SettingsStoring {
         static let showBrightnessOverlay = "showBrightnessOverlay"
         static let autoUpdateEnabled = "autoUpdateEnabled"
         static let brightnessStep = "brightnessStep"
+        static let brightnessControlMode = "brightnessControlMode"
     }
 
     private let defaults: UserDefaults
@@ -57,7 +61,8 @@ public final class UserDefaultsSettingsStore: SettingsStoring {
             showMenuBarIcon: defaults.object(forKey: Key.showMenuBarIcon) as? Bool ?? false,
             showBrightnessOverlay: defaults.object(forKey: Key.showBrightnessOverlay) as? Bool ?? true,
             autoUpdateEnabled: defaults.object(forKey: Key.autoUpdateEnabled) as? Bool ?? true,
-            brightnessStep: loadedBrightnessStep()
+            brightnessStep: loadedBrightnessStep(),
+            brightnessControlMode: loadedBrightnessControlMode()
         )
     }
 
@@ -68,6 +73,7 @@ public final class UserDefaultsSettingsStore: SettingsStoring {
         defaults.set(settings.showBrightnessOverlay, forKey: Key.showBrightnessOverlay)
         defaults.set(settings.autoUpdateEnabled, forKey: Key.autoUpdateEnabled)
         defaults.set(settings.brightnessStep, forKey: Key.brightnessStep)
+        defaults.set(settings.brightnessControlMode.rawValue, forKey: Key.brightnessControlMode)
     }
 
     private func loadedBrightnessStep() -> Float {
@@ -80,5 +86,13 @@ public final class UserDefaultsSettingsStore: SettingsStoring {
         }
 
         return stored
+    }
+
+    private func loadedBrightnessControlMode() -> BrightnessControlMode {
+        guard let rawValue = defaults.object(forKey: Key.brightnessControlMode) as? String,
+              let mode = BrightnessControlMode(rawValue: rawValue) else {
+            return .system
+        }
+        return mode
     }
 }

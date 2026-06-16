@@ -8,6 +8,10 @@ public protocol BrightnessControlling {
     func setBrightness(_ brightness: Float, for displayID: DisplayID) -> Bool
 }
 
+public protocol BrightnessControlResetting {
+    func reset()
+}
+
 public final class NativeBrightnessController: BrightnessControlling {
     private typealias DSGet = @convention(c) (DisplayID, UnsafeMutablePointer<Float>) -> Int32
     private typealias DSSet = @convention(c) (DisplayID, Float) -> Int32
@@ -74,6 +78,14 @@ public final class NativeBrightnessController: BrightnessControlling {
         }
 
         return false
+    }
+
+    public func canControl(displayID: DisplayID) -> Bool {
+        guard CGDisplayIsBuiltin(displayID) != 0 else {
+            return false
+        }
+
+        return brightness(for: displayID) != nil && (dsSet != nil || cdSet != nil)
     }
 
     private static func load<T>(_ handle: UnsafeMutableRawPointer?, _ symbol: String, as type: T.Type) -> T? {
