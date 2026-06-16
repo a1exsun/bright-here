@@ -95,6 +95,7 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
     private let locator = DisplayLocator()
     private let decoder = SystemDefinedEventDecoder()
     private let log = AppLog()
+    private let brightnessOverlay = BrightnessOverlayPresenter()
     private lazy var updater = SparkleUpdateController(log: log) { [weak self] status in
         self?.model?.runtimeStatus = status
     }
@@ -291,6 +292,28 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         log.info(
             "\(source) routed direction=\(direction) pointer=\(DiagnosticsFormatter.point(result.pointerLocation)) displayID=\(result.display.id) bounds=\(DiagnosticsFormatter.rect(result.display.bounds)) old=\(result.adjustment.oldValue) new=\(result.adjustment.newValue)"
         )
+
+        if model.settings.showBrightnessOverlay {
+            let display = result.display
+            brightnessOverlay.show(
+                level: BrightnessIndicatorState(value: result.adjustment.newValue),
+                on: display,
+                onValueChange: { [weak self] value in
+                    guard let self else {
+                        return
+                    }
+
+                    guard self.brightness.setBrightness(value, for: display.id) else {
+                        self.model.runtimeStatus = "Could not set brightness from slider"
+                        self.log.error("overlay slider failed displayID=\(display.id) value=\(value)")
+                        return
+                    }
+
+                    let state = BrightnessIndicatorState(value: value)
+                    self.model.runtimeStatus = "\(display.friendlyName): \(state.percent)%"
+                }
+            )
+        }
         return result
     }
 
@@ -502,6 +525,224 @@ enum LoginItemController {
         } else if SMAppService.mainApp.status == .enabled {
             try SMAppService.mainApp.unregister()
         }
+    }
+}
+
+@MainActor
+final class BrightnessOverlayPresenter {
+    private var panel: BrightnessOverlayPanel?
+    private var hostingView: NSHostingView<BrightnessOverlayView>?
+    private var hideTimer: Timer?
+    private let overlayModel = BrightnessOverlayModel()
+
+    func show(
+        level: BrightnessIndicatorState,
+        on display: ManagedDisplay,
+        onValueChange: @escaping (Float) -> Void
+    ) {
+        let panel = self.panel ?? makePanel()
+        self.panel = panel
+
+        overlayModel.configure(
+            level: level,
+            onValueChange: onValueChange,
+            onEditingChanged: { [weak self] isEditing in
+                if isEditing {
+                    self?.hideTimer?.invalidate()
+                } else {
+                    self?.scheduleHide()
+                }
+            }
+        )
+
+        let hostingView = self.hostingView ?? NSHostingView(rootView: BrightnessOverlayView(model: overlayModel))
+        hostingView.rootView = BrightnessOverlayView(model: overlayModel)
+        panel.contentView = hostingView
+        self.hostingView = hostingView
+
+        position(panel, on: Self.screen(for: display) ?? NSScreen.main)
+        panel.alphaValue = 1
+        panel.makeKeyAndOrderFront(nil)
+        panel.orderFrontRegardless()
+        scheduleHideIfNeeded()
+    }
+
+    private func makePanel() -> BrightnessOverlayPanel {
+        BrightnessOverlayPanel(contentRect: NSRect(x: 0, y: 0, width: 340, height: 58))
+    }
+
+    private func scheduleHideIfNeeded() {
+        guard !overlayModel.isEditing else {
+            return
+        }
+        scheduleHide()
+    }
+
+    private func scheduleHide() {
+        hideTimer?.invalidate()
+        hideTimer = Timer.scheduledTimer(withTimeInterval: 1.35, repeats: false) { [weak self] _ in
+            Task { @MainActor in
+                self?.hide()
+            }
+        }
+    }
+
+    private func hide() {
+        guard let panel, panel.isVisible else {
+            return
+        }
+
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.16
+            panel.animator().alphaValue = 0
+        } completionHandler: {
+            Task { @MainActor in
+                panel.orderOut(nil)
+            }
+        }
+    }
+
+    private func position(_ panel: NSPanel, on screen: NSScreen?) {
+        let frame = screen?.frame ?? NSScreen.main?.frame ?? .zero
+        let size = panel.frame.size
+        panel.setFrameOrigin(NSPoint(
+            x: frame.midX - size.width / 2,
+            y: frame.midY - size.height / 2
+        ))
+    }
+
+    private static func screen(for display: ManagedDisplay) -> NSScreen? {
+        NSScreen.screens.first { screen in
+            guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
+                return false
+            }
+            return number.uint32Value == display.id
+        }
+    }
+}
+
+final class BrightnessOverlayPanel: NSPanel {
+    init(contentRect: NSRect) {
+        super.init(
+            contentRect: contentRect,
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        isOpaque = false
+        backgroundColor = .clear
+        hasShadow = true
+        ignoresMouseEvents = false
+        hidesOnDeactivate = false
+        isReleasedWhenClosed = false
+        animationBehavior = .none
+        becomesKeyOnlyIfNeeded = true
+        level = .statusBar
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle, .transient]
+    }
+
+    override var canBecomeKey: Bool {
+        true
+    }
+
+    override var canBecomeMain: Bool {
+        false
+    }
+}
+
+@MainActor
+final class BrightnessOverlayModel: ObservableObject {
+    @Published var value: Double = 0
+    @Published private(set) var isEditing = false
+
+    private var onValueChange: ((Float) -> Void)?
+    private var onEditingChanged: ((Bool) -> Void)?
+
+    var percent: Int {
+        BrightnessIndicatorState(value: Float(value)).percent
+    }
+
+    var symbolName: String {
+        value <= 0.08 ? "sun.min.fill" : "sun.max.fill"
+    }
+
+    func configure(
+        level: BrightnessIndicatorState,
+        onValueChange: @escaping (Float) -> Void,
+        onEditingChanged: @escaping (Bool) -> Void
+    ) {
+        value = Double(level.normalizedValue)
+        self.onValueChange = onValueChange
+        self.onEditingChanged = onEditingChanged
+    }
+
+    func setValueFromSlider(_ newValue: Double) {
+        value = min(max(newValue, 0), 1)
+        onValueChange?(Float(value))
+    }
+
+    func setEditing(_ editing: Bool) {
+        isEditing = editing
+        onEditingChanged?(editing)
+    }
+}
+
+struct BrightnessOverlayView: View {
+    @ObservedObject var model: BrightnessOverlayModel
+
+    var body: some View {
+        ZStack {
+            NativeVisualEffectBackground(material: .hudWindow)
+
+            HStack(spacing: 12) {
+                Image(systemName: model.symbolName)
+                    .font(.system(size: 20, weight: .medium))
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(.primary)
+                    .frame(width: 24, height: 24)
+
+                Slider(
+                    value: Binding(
+                        get: { model.value },
+                        set: { model.setValueFromSlider($0) }
+                    ),
+                    in: 0...1,
+                    onEditingChanged: { model.setEditing($0) }
+                )
+
+                Text("\(model.percent)%")
+                    .font(.system(.body, design: .rounded).weight(.semibold))
+                    .monospacedDigit()
+                    .frame(width: 46, alignment: .trailing)
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 12)
+        }
+        .frame(width: 340, height: 58)
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(.primary.opacity(0.08), lineWidth: 1)
+        )
+        .accessibilityLabel("Brightness")
+        .accessibilityValue("\(model.percent)%")
+    }
+}
+
+struct NativeVisualEffectBackground: NSViewRepresentable {
+    let material: NSVisualEffectView.Material
+
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.blendingMode = .behindWindow
+        view.state = .active
+        view.material = material
+        return view
+    }
+
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
+        nsView.material = material
+        nsView.state = .active
     }
 }
 
@@ -730,6 +971,7 @@ struct SettingsView: View {
     private var controls: some View {
         VStack(alignment: .leading, spacing: 14) {
             Toggle("Enable F1/F2 brightness routing", isOn: binding(\.isEnabled))
+            Toggle("Show brightness overlay", isOn: binding(\.showBrightnessOverlay))
             Toggle("Launch at login", isOn: Binding(
                 get: { model.settings.launchAtLogin },
                 set: { model.setLaunchAtLogin($0) }
@@ -753,9 +995,11 @@ struct SettingsView: View {
                     .monospacedDigit()
             }
 
+            #if DEBUG
             Button("Open Debug Panel") {
                 model.openDebugWindow()
             }
+            #endif
         }
         .padding(14)
         .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8, style: .continuous))

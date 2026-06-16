@@ -19,11 +19,27 @@ struct SettingsStoreTests {
         let defaults = UserDefaults(suiteName: "BrightHereTests.roundTrip")!
         defaults.removePersistentDomain(forName: "BrightHereTests.roundTrip")
         let store = UserDefaultsSettingsStore(defaults: defaults)
-        let expected = AppSettings(isEnabled: false, launchAtLogin: true, showMenuBarIcon: true, brightnessStep: 0.1)
+        let expected = AppSettings(
+            isEnabled: false,
+            launchAtLogin: true,
+            showMenuBarIcon: true,
+            showBrightnessOverlay: false,
+            brightnessStep: 0.1
+        )
 
         store.save(expected)
 
         #expect(store.load() == expected)
+    }
+
+    @Test("defaults brightness overlay to visible for existing users")
+    func defaultsBrightnessOverlayToVisible() {
+        let defaults = UserDefaults(suiteName: "BrightHereTests.overlayDefault")!
+        defaults.removePersistentDomain(forName: "BrightHereTests.overlayDefault")
+
+        let settings = UserDefaultsSettingsStore(defaults: defaults).load()
+
+        #expect(settings.showBrightnessOverlay)
     }
 
     @Test("migrates legacy default brightness step")

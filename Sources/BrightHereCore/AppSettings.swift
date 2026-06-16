@@ -6,17 +6,20 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var isEnabled: Bool
     public var launchAtLogin: Bool
     public var showMenuBarIcon: Bool
+    public var showBrightnessOverlay: Bool
     public var brightnessStep: Float
 
     public init(
         isEnabled: Bool = true,
         launchAtLogin: Bool = false,
         showMenuBarIcon: Bool = false,
+        showBrightnessOverlay: Bool = true,
         brightnessStep: Float = Self.defaultBrightnessStep
     ) {
         self.isEnabled = isEnabled
         self.launchAtLogin = launchAtLogin
         self.showMenuBarIcon = showMenuBarIcon
+        self.showBrightnessOverlay = showBrightnessOverlay
         self.brightnessStep = brightnessStep
     }
 }
@@ -33,6 +36,7 @@ public final class UserDefaultsSettingsStore: SettingsStoring {
         static let isEnabled = "isEnabled"
         static let launchAtLogin = "launchAtLogin"
         static let showMenuBarIcon = "showMenuBarIcon"
+        static let showBrightnessOverlay = "showBrightnessOverlay"
         static let brightnessStep = "brightnessStep"
     }
 
@@ -47,6 +51,7 @@ public final class UserDefaultsSettingsStore: SettingsStoring {
             isEnabled: defaults.object(forKey: Key.isEnabled) as? Bool ?? true,
             launchAtLogin: defaults.object(forKey: Key.launchAtLogin) as? Bool ?? false,
             showMenuBarIcon: defaults.object(forKey: Key.showMenuBarIcon) as? Bool ?? false,
+            showBrightnessOverlay: defaults.object(forKey: Key.showBrightnessOverlay) as? Bool ?? true,
             brightnessStep: loadedBrightnessStep()
         )
     }
@@ -55,6 +60,7 @@ public final class UserDefaultsSettingsStore: SettingsStoring {
         defaults.set(settings.isEnabled, forKey: Key.isEnabled)
         defaults.set(settings.launchAtLogin, forKey: Key.launchAtLogin)
         defaults.set(settings.showMenuBarIcon, forKey: Key.showMenuBarIcon)
+        defaults.set(settings.showBrightnessOverlay, forKey: Key.showBrightnessOverlay)
         defaults.set(settings.brightnessStep, forKey: Key.brightnessStep)
     }
 
