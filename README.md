@@ -1,149 +1,48 @@
-# Bright Here
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/bright-here-icon-dark.png">
+    <img src="docs/assets/bright-here-icon.png" alt="Bright Here icon" width="128" height="128">
+  </picture>
+</p>
 
-Bright Here routes the Mac brightness keys to the display under the pointer.
+<h1 align="center">Bright Here</h1>
 
-It is a lightweight native macOS app:
+<p align="center">Your brightness follows your cursor.</p>
 
-- no Dock presence while running
-- optional menu bar icon
-- no display filtering, dimming overlays, gamma tricks, or grayscale workarounds
-- native brightness APIs only: `DisplayServices` first, `CoreDisplay` fallback
-- F1/F2 brightness keys are intercepted and applied to the pointer's current display
+Bright Here makes your Mac's F1/F2 brightness keys adjust the display under your cursor. It runs quietly in the background, does not stay in the Dock, and uses native display brightness APIs rather than dimming overlays or color filters.
 
-## Build
+## Install
 
-```sh
-swift build -c release
-```
+Download the latest DMG from [GitHub Releases](https://github.com/a1exsun/bright-here/releases/latest), open it, then drag **Bright Here.app** to **Applications**.
 
-## Run the app during development
+On first launch, macOS may ask you to confirm opening the app. Bright Here also needs Accessibility permission so it can intercept F1/F2 and route those key presses to the right display.
 
-```sh
-swift run bright-here --show-settings
-```
+## Use
 
-The production app normally runs in the background. `--show-settings` opens the settings window during development.
+1. Launch **Bright Here**.
+2. Grant Accessibility permission if prompted.
+3. Move your cursor to a display.
+4. Press F1 or F2.
 
-## Pointer Debugging
+The brightness change applies to the display under your cursor. You can reopen Bright Here from Applications, Launchpad, Spotlight, or the menu bar icon if enabled.
 
-Open the settings window and click **Open Debug Panel**. The panel shows:
+## Settings
 
-- current pointer location from `CGEvent`
-- current pointer location from `NSEvent`
-- selected display id and bounds
-- all active displays and whether each contains the pointer
-- test brightness buttons for the currently selected display
+Bright Here includes a small settings window for:
 
-The production F1/F2 routing uses `CGEvent(source: nil)?.location` at keypress time instead of the keyboard event's own location.
+- showing or hiding the brightness overlay
+- launching at login
+- showing or hiding the menu bar icon
+- changing the brightness step size
+- checking for updates
+- reporting an issue
 
-## CLI diagnostics
+If the menu bar icon is hidden, Bright Here still runs in the background. Launch the app again to reopen settings or quit.
 
-```sh
-swift run bright-here-cli list
-swift run bright-here-cli diagnose
-swift run bright-here-cli set 1 0.55
-swift run bright-here-cli set id:1 0.50
-```
+## Troubleshooting
 
-## Test
+If F1/F2 still adjusts the built-in display, open Bright Here and check whether Accessibility permission is required. If the app is not working as expected, click **It's not working** in the settings window to open a GitHub issue with helpful diagnostic details.
 
-```sh
-swift test
-```
+## Privacy
 
-The automated tests cover:
-
-- pointer-to-display selection
-- pointer-based brightness routing
-- brightness step clamping
-- brightness write-through behavior using a fake controller
-- F1/F2 system-defined event decoding
-- settings defaults and persistence
-- issue URL/report generation
-- log file append and rotation
-
-## Logs and Issue Reports
-
-Runtime logs are written to:
-
-```text
-~/Library/Logs/Bright Here/bright-here.log
-```
-
-The settings window's **It's not working** button opens a prefilled GitHub issue and copies environment details plus recent `ERROR` log lines to the clipboard as a fenced text block. Paste that block into the issue's final section if available.
-
-## Package
-
-```sh
-bash Scripts/package_app.sh
-bash Scripts/create_dmg.sh
-```
-
-This creates:
-
-```text
-release/Bright Here.app
-release/BrightHere-<version>.zip
-release/BrightHere-<version>.dmg
-```
-
-The zip is used for Sparkle updates. The DMG is the recommended user-facing installer: open it and drag `Bright Here.app` to Applications. The scripts automatically use the stable self-signed identity when it exists in Keychain, or fall back to ad-hoc signing. CI can use `SIGN_IDENTITY`, `SIGNING_CERTIFICATE_P12_BASE64`, and Apple notarization secrets when configured.
-
-## Stable Self-Signed Signing
-
-For early distribution without a Developer ID certificate, create one stable local code signing identity and reuse it for every build:
-
-```sh
-bash Scripts/create_self_signed_identity.sh
-bash Scripts/package_app.sh
-bash Scripts/create_dmg.sh
-```
-
-The default identity name is:
-
-```text
-Bright Here Self-Signed Code Signing
-```
-
-`package_app.sh` and `create_dmg.sh` automatically use that identity when it exists in Keychain. If it is missing, they fall back to ad-hoc signing.
-
-The script also writes a reusable `.p12` and password under `.build/signing/`. Keep both files private.
-
-To use the same self-signed identity in GitHub Actions releases:
-
-```sh
-bash Scripts/create_self_signed_identity.sh
-base64 -i .build/signing/bright-here-signing.p12 | pbcopy
-```
-
-Then add these GitHub Secrets:
-
-- `SIGNING_CERTIFICATE_P12_BASE64`: the copied base64 text
-- `SIGNING_CERTIFICATE_PASSWORD`: the contents of `.build/signing/bright-here-signing.password`
-- `SIGN_IDENTITY`: `Bright Here Self-Signed Code Signing`
-
-Keep the `.p12` and password private. Recreating the certificate changes the app's signing identity and may require users to grant Accessibility permission again.
-
-## GitHub Release Automation
-
-CI runs on `dev`, `main`, and PRs into `main`.
-
-Release automation runs on pushes to `main`:
-
-1. resolve packages
-2. run tests
-3. package the app
-4. notarize the zip if Apple credentials are configured
-5. generate the Sparkle appcast
-6. create and optionally notarize the DMG
-7. create a GitHub Release for `v$(cat VERSION)` if that tag does not already exist
-
-## Sparkle Stage 9
-
-Sparkle is intentionally stage 9. The app links Sparkle and exposes a Check for Updates action. The checked-in app contains the public EDDSA key; release automation signs the appcast with the `SPARKLE_PRIVATE_KEY` GitHub Actions secret.
-
-```sh
-Scripts/generate_appcast.sh
-```
-
-Before public release, publish the generated `appcast.xml` at the URL in `SUFeedURL`.
+Bright Here does not collect analytics. It only checks your cursor position locally when F1/F2 is pressed and writes local logs for troubleshooting.

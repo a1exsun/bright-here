@@ -13,6 +13,7 @@ public struct ManagedDisplay: Identifiable, Equatable, Sendable {
     public let isOnline: Bool
     public let isAsleep: Bool
     public let source: String
+    public let displayName: String?
 
     public init(
         index: Int,
@@ -23,7 +24,8 @@ public struct ManagedDisplay: Identifiable, Equatable, Sendable {
         isActive: Bool,
         isOnline: Bool,
         isAsleep: Bool,
-        source: String
+        source: String,
+        displayName: String? = nil
     ) {
         self.index = index
         self.id = id
@@ -34,6 +36,7 @@ public struct ManagedDisplay: Identifiable, Equatable, Sendable {
         self.isOnline = isOnline
         self.isAsleep = isAsleep
         self.source = source
+        self.displayName = displayName
     }
 
     public var roleDescription: String {
@@ -47,8 +50,11 @@ public struct ManagedDisplay: Identifiable, Equatable, Sendable {
     }
 
     public var friendlyName: String {
+        if let displayName = displayName?.trimmingCharacters(in: .whitespacesAndNewlines), !displayName.isEmpty {
+            return displayName
+        }
         if isBuiltin {
-            return "Built-in Display"
+            return "Built-in Liquid Retina XDR Display"
         }
         if isMain {
             return "Main External Display"

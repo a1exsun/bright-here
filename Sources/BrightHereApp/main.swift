@@ -254,9 +254,6 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
     }
 
     private func handleSystemDefinedEvent(_ event: CGEvent) -> Bool {
-        guard model.settings.isEnabled else {
-            return false
-        }
         guard let nsEvent = NSEvent(cgEvent: event) else {
             return false
         }
@@ -526,9 +523,14 @@ enum LoginItemController {
 @MainActor
 final class BrightnessOverlayPresenter {
     private var panel: BrightnessOverlayPanel?
-    private var hostingView: NSHostingView<BrightnessOverlayView>?
+    private var contentView: BrightnessOverlayContentView?
     private var hideTimer: Timer?
-    private let overlayModel = BrightnessOverlayModel()
+    private var isEditing = false
+    private var isHovering = false
+
+    private var isInteractive: Bool {
+        isEditing || isHovering
+    }
 
     func show(
         level: BrightnessIndicatorState,
@@ -538,36 +540,51 @@ final class BrightnessOverlayPresenter {
         let panel = self.panel ?? makePanel()
         self.panel = panel
 
-        overlayModel.configure(
+        let contentView = self.contentView ?? BrightnessOverlayContentView(frame: NSRect(
+            origin: .zero,
+            size: BrightnessOverlayContentView.preferredSize
+        ))
+        contentView.configure(
             level: level,
+            displayName: display.friendlyName,
             onValueChange: onValueChange,
             onEditingChanged: { [weak self] isEditing in
+                self?.isEditing = isEditing
                 if isEditing {
                     self?.hideTimer?.invalidate()
                 } else {
-                    self?.scheduleHide()
+                    self?.scheduleHideIfNeeded()
+                }
+            },
+            onHoverChanged: { [weak self] isHovering in
+                self?.isHovering = isHovering
+                if isHovering {
+                    self?.hideTimer?.invalidate()
+                } else {
+                    self?.scheduleHideIfNeeded()
                 }
             }
         )
-
-        let hostingView = self.hostingView ?? NSHostingView(rootView: BrightnessOverlayView(model: overlayModel))
-        hostingView.rootView = BrightnessOverlayView(model: overlayModel)
-        panel.contentView = hostingView
-        self.hostingView = hostingView
+        panel.contentView = contentView
+        self.contentView = contentView
 
         position(panel, on: Self.screen(for: display) ?? NSScreen.main)
         panel.alphaValue = 1
         panel.makeKeyAndOrderFront(nil)
         panel.orderFrontRegardless()
+        contentView.syncHoverStateWithMouseLocation()
         scheduleHideIfNeeded()
     }
 
     private func makePanel() -> BrightnessOverlayPanel {
-        BrightnessOverlayPanel(contentRect: NSRect(x: 0, y: 0, width: 340, height: 58))
+        BrightnessOverlayPanel(contentRect: NSRect(
+            origin: .zero,
+            size: BrightnessOverlayContentView.preferredSize
+        ))
     }
 
     private func scheduleHideIfNeeded() {
-        guard !overlayModel.isEditing else {
+        guard !isInteractive else {
             return
         }
         scheduleHide()
@@ -575,7 +592,7 @@ final class BrightnessOverlayPresenter {
 
     private func scheduleHide() {
         hideTimer?.invalidate()
-        hideTimer = Timer.scheduledTimer(withTimeInterval: 1.35, repeats: false) { [weak self] _ in
+        hideTimer = Timer.scheduledTimer(withTimeInterval: 2.2, repeats: false) { [weak self] _ in
             Task { @MainActor in
                 self?.hide()
             }
@@ -597,12 +614,20 @@ final class BrightnessOverlayPresenter {
         }
     }
 
+    private func hideImmediately() {
+        hideTimer?.invalidate()
+        isEditing = false
+        isHovering = false
+        contentView?.resetHoverState()
+        panel?.orderOut(nil)
+    }
+
     private func position(_ panel: NSPanel, on screen: NSScreen?) {
-        let frame = screen?.frame ?? NSScreen.main?.frame ?? .zero
+        let frame = screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? .zero
         let size = panel.frame.size
         panel.setFrameOrigin(NSPoint(
-            x: frame.midX - size.width / 2,
-            y: frame.midY - size.height / 2
+            x: frame.maxX - size.width - 48,
+            y: frame.maxY - size.height - 10
         ))
     }
 
@@ -613,6 +638,272 @@ final class BrightnessOverlayPresenter {
             }
             return number.uint32Value == display.id
         }
+    }
+}
+
+@MainActor
+final class BrightnessOverlayContentView: NSView {
+    static let preferredSize = NSSize(width: 290, height: 62)
+
+    private let cardView: NSView
+    private let contentHost: NSView
+    private let usesGlassEffect: Bool
+    private let cornerRadius: CGFloat = 26
+    private let titleLabel = NSTextField(labelWithString: "")
+    private let slider = BrightnessOverlaySlider(frame: .zero)
+    private var trackingArea: NSTrackingArea?
+    private var onValueChange: ((Float) -> Void)?
+    private var onEditingChanged: ((Bool) -> Void)?
+    private var onHoverChanged: ((Bool) -> Void)?
+    private var isHovering = false
+
+    override init(frame frameRect: NSRect) {
+        let host = NSView()
+        host.translatesAutoresizingMaskIntoConstraints = false
+
+        if #available(macOS 26.0, *) {
+            let glass = NSGlassEffectView()
+            glass.contentView = host
+            glass.cornerRadius = cornerRadius
+            glass.style = .regular
+            cardView = glass
+            usesGlassEffect = true
+        } else {
+            let visual = NSVisualEffectView()
+            visual.material = .hudWindow
+            visual.blendingMode = .behindWindow
+            visual.state = .active
+            visual.addSubview(host)
+            cardView = visual
+            usesGlassEffect = false
+        }
+
+        contentHost = host
+        super.init(frame: frameRect)
+        setupView()
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    func configure(
+        level: BrightnessIndicatorState,
+        displayName: String,
+        onValueChange: @escaping (Float) -> Void,
+        onEditingChanged: @escaping (Bool) -> Void,
+        onHoverChanged: @escaping (Bool) -> Void
+    ) {
+        titleLabel.stringValue = displayName
+        slider.doubleValue = Double(level.normalizedValue)
+        self.onValueChange = onValueChange
+        self.onEditingChanged = onEditingChanged
+        self.onHoverChanged = onHoverChanged
+    }
+
+    func resetHoverState() {
+        isHovering = false
+        slider.showsKnob = false
+    }
+
+    func syncHoverStateWithMouseLocation() {
+        guard let window else {
+            return
+        }
+
+        let location = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        setHovering(bounds.contains(location))
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+
+        if let trackingArea {
+            removeTrackingArea(trackingArea)
+        }
+
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.activeAlways, .mouseEnteredAndExited, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        trackingArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        setHovering(true)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        setHovering(false)
+    }
+
+    private func setupView() {
+        setupCard()
+        setupContent()
+    }
+
+    private func setupCard() {
+        cardView.translatesAutoresizingMaskIntoConstraints = false
+        if !usesGlassEffect {
+            cardView.wantsLayer = true
+            cardView.layer?.cornerRadius = cornerRadius
+            cardView.layer?.cornerCurve = .continuous
+            cardView.layer?.masksToBounds = true
+        }
+        addSubview(cardView)
+
+        NSLayoutConstraint.activate([
+            cardView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            cardView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            cardView.topAnchor.constraint(equalTo: topAnchor),
+            cardView.bottomAnchor.constraint(equalTo: bottomAnchor)
+        ])
+
+        if contentHost.superview == cardView {
+            NSLayoutConstraint.activate([
+                contentHost.leadingAnchor.constraint(equalTo: cardView.leadingAnchor),
+                contentHost.trailingAnchor.constraint(equalTo: cardView.trailingAnchor),
+                contentHost.topAnchor.constraint(equalTo: cardView.topAnchor),
+                contentHost.bottomAnchor.constraint(equalTo: cardView.bottomAnchor)
+            ])
+        }
+    }
+
+    private func setupContent() {
+        titleLabel.font = .systemFont(ofSize: 12, weight: .semibold)
+        titleLabel.textColor = .labelColor
+        titleLabel.lineBreakMode = .byTruncatingTail
+        titleLabel.maximumNumberOfLines = 1
+        titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        let minimumIcon = iconView(symbolName: "sun.min.fill", pointSize: 12)
+        let maximumIcon = iconView(symbolName: "sun.max.fill", pointSize: 13)
+
+        slider.controlSize = .small
+        slider.minValue = 0
+        slider.maxValue = 1
+        slider.isContinuous = true
+        slider.trackFillColor = .white
+        slider.showsKnob = false
+        slider.target = self
+        slider.action = #selector(sliderChanged)
+        slider.onEditingChanged = { [weak self] editing in
+            self?.onEditingChanged?(editing)
+        }
+        slider.translatesAutoresizingMaskIntoConstraints = false
+
+        let row = NSStackView(views: [minimumIcon, slider, maximumIcon])
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 7
+        row.translatesAutoresizingMaskIntoConstraints = false
+
+        let stack = NSStackView(views: [titleLabel, row])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 5
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        contentHost.addSubview(stack)
+
+        NSLayoutConstraint.activate([
+            minimumIcon.widthAnchor.constraint(equalToConstant: 15),
+            maximumIcon.widthAnchor.constraint(equalToConstant: 17),
+            slider.widthAnchor.constraint(greaterThanOrEqualToConstant: 166),
+            row.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            stack.leadingAnchor.constraint(equalTo: contentHost.leadingAnchor, constant: 15),
+            stack.trailingAnchor.constraint(equalTo: contentHost.trailingAnchor, constant: -15),
+            stack.centerYAnchor.constraint(equalTo: contentHost.centerYAnchor)
+        ])
+    }
+
+    private func iconView(symbolName: String, pointSize: CGFloat) -> NSImageView {
+        let configuration = NSImage.SymbolConfiguration(pointSize: pointSize, weight: .semibold)
+        let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)?
+            .withSymbolConfiguration(configuration)
+        image?.isTemplate = true
+
+        let view = NSImageView(image: image ?? NSImage())
+        view.contentTintColor = .labelColor
+        view.translatesAutoresizingMaskIntoConstraints = false
+        view.setContentHuggingPriority(.required, for: .horizontal)
+        view.setContentCompressionResistancePriority(.required, for: .horizontal)
+        return view
+    }
+
+    private func setHovering(_ hovering: Bool) {
+        guard isHovering != hovering else {
+            return
+        }
+
+        isHovering = hovering
+        slider.showsKnob = hovering
+        onHoverChanged?(hovering)
+    }
+
+    @objc private func sliderChanged() {
+        onValueChange?(Float(slider.doubleValue))
+    }
+}
+
+@MainActor
+final class BrightnessOverlaySlider: NSSlider {
+    var onEditingChanged: ((Bool) -> Void)?
+    var showsKnob = true {
+        didSet {
+            guard oldValue != showsKnob else {
+                return
+            }
+            (cell as? BrightnessOverlaySliderCell)?.showsKnob = showsKnob
+            needsDisplay = true
+        }
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        installCell()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        installCell()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        onEditingChanged?(true)
+        super.mouseDown(with: event)
+        onEditingChanged?(false)
+    }
+
+    private func installCell() {
+        let sliderCell = BrightnessOverlaySliderCell()
+        sliderCell.minValue = minValue
+        sliderCell.maxValue = maxValue
+        sliderCell.doubleValue = doubleValue
+        sliderCell.isContinuous = isContinuous
+        sliderCell.controlSize = controlSize
+        sliderCell.showsKnob = showsKnob
+        cell = sliderCell
+    }
+}
+
+final class BrightnessOverlaySliderCell: NSSliderCell {
+    var showsKnob = true
+
+    override func drawKnob(_ knobRect: NSRect) {
+        guard showsKnob else {
+            return
+        }
+        super.drawKnob(knobRect)
+    }
+
+    override func drawKnob() {
+        guard showsKnob else {
+            return
+        }
+        super.drawKnob()
     }
 }
 
@@ -642,102 +933,6 @@ final class BrightnessOverlayPanel: NSPanel {
 
     override var canBecomeMain: Bool {
         false
-    }
-}
-
-@MainActor
-final class BrightnessOverlayModel: ObservableObject {
-    @Published var value: Double = 0
-    @Published private(set) var isEditing = false
-
-    private var onValueChange: ((Float) -> Void)?
-    private var onEditingChanged: ((Bool) -> Void)?
-
-    var percent: Int {
-        BrightnessIndicatorState(value: Float(value)).percent
-    }
-
-    var symbolName: String {
-        value <= 0.08 ? "sun.min.fill" : "sun.max.fill"
-    }
-
-    func configure(
-        level: BrightnessIndicatorState,
-        onValueChange: @escaping (Float) -> Void,
-        onEditingChanged: @escaping (Bool) -> Void
-    ) {
-        value = Double(level.normalizedValue)
-        self.onValueChange = onValueChange
-        self.onEditingChanged = onEditingChanged
-    }
-
-    func setValueFromSlider(_ newValue: Double) {
-        value = min(max(newValue, 0), 1)
-        onValueChange?(Float(value))
-    }
-
-    func setEditing(_ editing: Bool) {
-        isEditing = editing
-        onEditingChanged?(editing)
-    }
-}
-
-struct BrightnessOverlayView: View {
-    @ObservedObject var model: BrightnessOverlayModel
-
-    var body: some View {
-        ZStack {
-            NativeVisualEffectBackground(material: .hudWindow)
-
-            HStack(spacing: 12) {
-                Image(systemName: model.symbolName)
-                    .font(.system(size: 20, weight: .medium))
-                    .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(.primary)
-                    .frame(width: 24, height: 24)
-
-                Slider(
-                    value: Binding(
-                        get: { model.value },
-                        set: { model.setValueFromSlider($0) }
-                    ),
-                    in: 0...1,
-                    onEditingChanged: { model.setEditing($0) }
-                )
-
-                Text("\(model.percent)%")
-                    .font(.system(.body, design: .rounded).weight(.semibold))
-                    .monospacedDigit()
-                    .frame(width: 46, alignment: .trailing)
-            }
-            .padding(.horizontal, 18)
-            .padding(.vertical, 12)
-        }
-        .frame(width: 340, height: 58)
-        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(.primary.opacity(0.08), lineWidth: 1)
-        )
-        .accessibilityLabel("Brightness")
-        .accessibilityValue("\(model.percent)%")
-    }
-}
-
-struct NativeVisualEffectBackground: NSViewRepresentable {
-    let material: NSVisualEffectView.Material
-
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        let view = NSVisualEffectView()
-        view.blendingMode = .behindWindow
-        view.state = .active
-        view.material = material
-        return view
-    }
-
-    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
-        nsView.material = material
-        nsView.state = .active
     }
 }
 
@@ -830,6 +1025,7 @@ final class DebugViewModel: ObservableObject {
 
 struct SettingsView: View {
     @ObservedObject var model: AppModel
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         VStack(spacing: 0) {
@@ -837,7 +1033,9 @@ struct SettingsView: View {
             Divider()
 
             VStack(spacing: 18) {
-                systemStatus
+                if !model.isAccessibilityTrusted {
+                    systemStatus
+                }
                 controls
                 githubModule
             }
@@ -867,14 +1065,15 @@ struct SettingsView: View {
 
     private var header: some View {
         HStack(spacing: 12) {
-            Image(systemName: "sun.max")
-                .font(.title2)
+            Image(nsImage: settingsLogoImage)
+                .resizable()
+                .interpolation(.high)
                 .frame(width: 30, height: 30)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("Bright Here")
                     .font(.title3.weight(.semibold))
-                Text("Brightness follows your pointer")
+                Text("Your brightness follows your cursor")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -882,6 +1081,13 @@ struct SettingsView: View {
             Spacer()
         }
         .padding(20)
+    }
+
+    private var settingsLogoImage: NSImage {
+        if colorScheme == .dark, let image = NSImage(named: "AppIconDark") {
+            return image
+        }
+        return NSImage(named: "AppIcon") ?? NSApp.applicationIconImage
     }
 
     private var appVersionText: String {
@@ -928,41 +1134,24 @@ struct SettingsView: View {
         )
     }
 
-    private var systemStatusIsReady: Bool {
-        model.isAccessibilityTrusted && model.isHotkeyListenerActive
-    }
-
     private var systemStatusTitle: String {
-        if systemStatusIsReady {
-            return "All Set"
-        }
-        if !model.isAccessibilityTrusted {
-            return "Permission Needed"
-        }
-        return "Listener Inactive"
+        "Permission Needed"
     }
 
     private var systemStatusDetail: String {
-        if systemStatusIsReady {
-            return "Accessibility and F1/F2 listener are active."
-        }
-        if !model.isAccessibilityTrusted {
-            return "Accessibility permission is required before F1/F2 can be routed."
-        }
-        return "Accessibility is granted, but the F1/F2 listener is not active."
+        "Accessibility permission is required before F1/F2 can be routed."
     }
 
     private var systemStatusIcon: String {
-        systemStatusIsReady ? "checkmark.shield.fill" : "exclamationmark.triangle.fill"
+        "exclamationmark.triangle.fill"
     }
 
     private var systemStatusTint: Color {
-        systemStatusIsReady ? .green : .orange
+        .orange
     }
 
     private var controls: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Toggle("Enable F1/F2 brightness routing", isOn: binding(\.isEnabled))
             Toggle("Show brightness overlay", isOn: binding(\.showBrightnessOverlay))
             Toggle("Launch at login", isOn: Binding(
                 get: { model.settings.launchAtLogin },
@@ -987,7 +1176,7 @@ struct SettingsView: View {
                     .monospacedDigit()
             }
 
-            #if DEBUG
+            #if DEBUG || LOCAL_DEBUG_PANEL
             Button("Open Debug Panel") {
                 model.openDebugWindow()
             }

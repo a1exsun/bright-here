@@ -17,19 +17,17 @@ fi
 
 RELEASE_NOTES="## What's Changed
 
-- Add a native macOS brightness overlay when F1/F2 changes brightness.
-- Replace the overlay progress bar with a draggable native slider and add a setting to show or hide it.
-- Improve recovery when the menu bar icon is hidden: launching Bright Here again reopens settings.
-- Add a Quit action in settings for users who hide the menu bar icon.
-- Hide the debug panel entry from production builds.
-- Simplify settings: continuous Step slider and version in the lower-left footer.
-- Add stable self-signed signing support for early releases without Developer ID.
+- Refine the brightness HUD with a native macOS glass panel, real display names, a white native slider, and hover-only slider thumb.
+- Add light and dark app artwork and simplify the README for end users.
+- Simplify settings: Bright Here is always active while running, with fewer controls and clearer permission messaging.
+- Keep the Debug Panel visible in local builds while hiding it from GitHub release builds.
+- Use ad-hoc signing for public release artifacts until Developer ID signing is available.
 
 ## Install
 
 Download \`BrightHere-$VERSION.dmg\`, open it, then drag \`Bright Here.app\` to Applications.
 
-This release is self-signed, not notarized with Apple Developer ID. macOS may still show an unidentified developer warning on first install. After users grant Accessibility once to this stable signing identity, future updates should avoid the repeated-permission problem caused by ad-hoc signing.
+This release is ad-hoc signed and not notarized with Apple Developer ID. macOS may still show an unidentified developer warning on first install.
 
 The zip asset is kept for Sparkle updates and advanced/manual installs.
 

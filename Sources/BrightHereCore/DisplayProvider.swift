@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 
 public protocol DisplayProviding {
@@ -62,7 +63,17 @@ public struct CoreGraphicsDisplayProvider: DisplayProviding {
             isActive: CGDisplayIsActive(id) != 0,
             isOnline: CGDisplayIsOnline(id) != 0,
             isAsleep: CGDisplayIsAsleep(id) != 0,
-            source: source
+            source: source,
+            displayName: Self.localizedName(for: id)
         )
+    }
+
+    private static func localizedName(for id: DisplayID) -> String? {
+        NSScreen.screens.first { screen in
+            guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
+                return false
+            }
+            return number.uint32Value == id
+        }?.localizedName
     }
 }

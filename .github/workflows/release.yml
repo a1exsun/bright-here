@@ -19,12 +19,6 @@ jobs:
         run: swift package resolve
       - name: Test
         run: swift test
-      - name: Import signing identity if configured
-        env:
-          SIGNING_CERTIFICATE_P12_BASE64: ${{ secrets.SIGNING_CERTIFICATE_P12_BASE64 }}
-          SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.SIGNING_CERTIFICATE_PASSWORD }}
-          SIGN_IDENTITY: ${{ secrets.SIGN_IDENTITY }}
-        run: bash Scripts/import_signing_identity.sh
       - name: Package app
         run: bash Scripts/package_app.sh
       - name: Notarize if credentials are present

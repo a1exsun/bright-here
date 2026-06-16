@@ -9,7 +9,7 @@ func printDisplay(_ display: ManagedDisplay, brightness: BrightnessControlling, 
     let x = Int(display.bounds.origin.x)
     let y = Int(display.bounds.origin.y)
     let tags = display.roleDescription.isEmpty ? "" : " [\(display.roleDescription)]"
-    var fields = "#\(display.index) id=\(display.id) brightness=\(value) bounds=\(width)x\(height)+\(x)+\(y)\(tags)"
+    var fields = "#\(display.index) id=\(display.id) name=\"\(display.friendlyName)\" brightness=\(value) bounds=\(width)x\(height)+\(x)+\(y)\(tags)"
 
     if includeMode {
         if let mode = CGDisplayCopyDisplayMode(display.id) {

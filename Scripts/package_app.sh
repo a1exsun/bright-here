@@ -12,12 +12,26 @@ CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 FRAMEWORKS_DIR="$CONTENTS_DIR/Frameworks"
+SWIFT_BUILD_FLAGS=()
+
+if [[ "${GITHUB_ACTIONS:-}" != "true" && "${HIDE_DEBUG_PANEL:-}" != "1" ]]; then
+  SWIFT_BUILD_FLAGS+=("-Xswiftc" "-DLOCAL_DEBUG_PANEL")
+fi
+
+build_product() {
+  local product="$1"
+  if ((${#SWIFT_BUILD_FLAGS[@]})); then
+    swift build -c "$CONFIGURATION" "${SWIFT_BUILD_FLAGS[@]}" --product "$product" --scratch-path "$SCRATCH_DIR"
+  else
+    swift build -c "$CONFIGURATION" --product "$product" --scratch-path "$SCRATCH_DIR"
+  fi
+}
 
 rm -rf "$ROOT_DIR/release"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR" "$FRAMEWORKS_DIR"
 
-swift build -c "$CONFIGURATION" --product bright-here --scratch-path "$SCRATCH_DIR"
-swift build -c "$CONFIGURATION" --product bright-here-cli --scratch-path "$SCRATCH_DIR"
+build_product bright-here
+build_product bright-here-cli
 
 BRIGHT_HERE_BIN="$(find "$SCRATCH_DIR" -maxdepth 5 -path "*/$CONFIGURATION/bright-here" -type f -print -quit)"
 if [[ -z "$BRIGHT_HERE_BIN" ]]; then
@@ -29,6 +43,8 @@ BUILD_DIR="$(dirname "$BRIGHT_HERE_BIN")"
 cp "$BUILD_DIR/bright-here" "$MACOS_DIR/bright-here"
 cp "$BUILD_DIR/bright-here-cli" "$MACOS_DIR/bright-here-cli"
 cp "$ROOT_DIR/Resources/Info.plist" "$CONTENTS_DIR/Info.plist"
+cp "$ROOT_DIR/Resources/AppIcon.icns" "$RESOURCES_DIR/AppIcon.icns"
+cp "$ROOT_DIR/Resources/AppIconDark.png" "$RESOURCES_DIR/AppIconDark.png"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$CONTENTS_DIR/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$CONTENTS_DIR/Info.plist"
 

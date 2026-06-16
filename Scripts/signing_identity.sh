@@ -8,9 +8,8 @@ resolve_sign_identity() {
     return
   fi
 
-  local candidate="${BRIGHT_HERE_SIGN_IDENTITY:-$DEFAULT_SIGN_IDENTITY}"
-  if security find-identity -v -p codesigning 2>/dev/null | grep -F "\"$candidate\"" >/dev/null; then
-    printf '%s\n' "$candidate"
+  if [[ -n "${BRIGHT_HERE_SIGN_IDENTITY:-}" ]]; then
+    printf '%s\n' "$BRIGHT_HERE_SIGN_IDENTITY"
   else
     printf '%s\n' "-"
   fi
@@ -19,7 +18,7 @@ resolve_sign_identity() {
 print_sign_identity_summary() {
   local identity="$1"
   if [[ "$identity" == "-" ]]; then
-    echo "Signing with ad-hoc identity. Run Scripts/create_self_signed_identity.sh for stable local signing." >&2
+    echo "Signing with ad-hoc identity." >&2
   else
     echo "Signing with identity: $identity" >&2
   fi
