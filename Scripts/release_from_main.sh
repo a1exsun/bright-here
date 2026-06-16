@@ -21,7 +21,8 @@ RELEASE_NOTES="## What's Changed
 - Add an automatic updates setting, enabled by default, with daily Sparkle update checks.
 - Keep the brightness HUD title text and filled slider track permanently white in both light and dark appearances.
 - Hide the brightness HUD immediately with a short fade when the user clicks outside it.
-- Use DMG-only release artifacts and a single SemVer app version.
+- Use DMG-only release artifacts.
+- Restore a monotonic internal Sparkle build version while keeping the app UI version SemVer-only.
 
 ## Install
 
