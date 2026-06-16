@@ -6,6 +6,14 @@ import ServiceManagement
 import Sparkle
 import SwiftUI
 
+struct DisplayBrightnessModeState: Identifiable, Equatable {
+    let id: String
+    let displayID: DisplayID
+    let displayName: String
+    let isSystemAvailable: Bool
+    let selectedMode: BrightnessControlMode
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     @Published var settings: AppSettings
@@ -13,8 +21,7 @@ final class AppModel: ObservableObject {
     @Published var runtimeStatus: String = "Ready"
     @Published var isAccessibilityTrusted = false
     @Published var isHotkeyListenerActive = false
-    @Published var brightnessModeDisplayName = "Current display"
-    @Published var isSystemBrightnessModeAvailable = true
+    @Published var displayBrightnessModes: [DisplayBrightnessModeState] = []
 
     private let store: SettingsStoring
     private weak var coordinator: AppCoordinator?
@@ -31,14 +38,8 @@ final class AppModel: ObservableObject {
         coordinator?.settingsDidChange(settings)
     }
 
-    func setBrightnessControlMode(_ mode: BrightnessControlMode) {
-        guard mode != .system || isSystemBrightnessModeAvailable else {
-            runtimeStatus = "System brightness is unavailable for \(brightnessModeDisplayName)"
-            return
-        }
-
-        settings.brightnessControlMode = mode
-        save()
+    func setBrightnessControlMode(_ mode: BrightnessControlMode, for displayIdentity: String) {
+        coordinator?.setBrightnessControlMode(mode, for: displayIdentity)
     }
 
     func refreshPermissionStatus() {
@@ -124,6 +125,10 @@ private final class BrightnessControllerRegistry {
     func reset(mode: BrightnessControlMode) {
         (controller(for: mode) as? BrightnessControlResetting)?.reset()
     }
+
+    func reset(mode: BrightnessControlMode, displayID: DisplayID) {
+        (controller(for: mode) as? BrightnessControlResetting)?.reset(displayID: displayID)
+    }
 }
 
 @MainActor
@@ -148,7 +153,6 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
     private var eventTap: EventTapController?
     private var eventTapStarted = false
     private var didLogMissingAccessibilityPermission = false
-    private var activeBrightnessControlMode: BrightnessControlMode?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -185,14 +189,10 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
     }
 
     func settingsDidChange(_ settings: AppSettings) {
-        if let previous = activeBrightnessControlMode, previous != settings.brightnessControlMode {
-            brightnessControllers.reset(mode: previous)
-        }
-        activeBrightnessControlMode = settings.brightnessControlMode
-
         configureStatusItem(show: settings.showMenuBarIcon)
         updater.applySettings(settings)
         model?.refreshPermissionStatus()
+        refreshBrightnessModeAvailability()
     }
 
     func refreshBrightnessModeAvailability() {
@@ -200,14 +200,42 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
             return
         }
 
-        guard let display = currentPointerDisplay() else {
-            model.brightnessModeDisplayName = "Current display"
-            model.isSystemBrightnessModeAvailable = false
+        let states = externalDisplays().map { display in
+            let systemAvailable = brightnessControllers.system.canControl(displayID: display.id)
+            let selectedMode = effectiveBrightnessControlMode(for: display, systemAvailable: systemAvailable)
+            return DisplayBrightnessModeState(
+                id: display.settingsIdentity,
+                displayID: display.id,
+                displayName: display.friendlyName,
+                isSystemAvailable: systemAvailable,
+                selectedMode: selectedMode
+            )
+        }
+
+        model.displayBrightnessModes = states
+    }
+
+    func setBrightnessControlMode(_ mode: BrightnessControlMode, for displayIdentity: String) {
+        guard let model,
+              let display = externalDisplays().first(where: { $0.settingsIdentity == displayIdentity }) else {
             return
         }
 
-        model.brightnessModeDisplayName = display.friendlyName
-        model.isSystemBrightnessModeAvailable = brightnessControllers.system.canControl(displayID: display.id)
+        let systemAvailable = brightnessControllers.system.canControl(displayID: display.id)
+        guard mode != .system || systemAvailable else {
+            model.runtimeStatus = "System brightness is unavailable for \(display.friendlyName)"
+            refreshBrightnessModeAvailability()
+            return
+        }
+
+        let previous = model.settings.brightnessControlMode(for: display)
+        if previous != mode {
+            brightnessControllers.reset(mode: previous, displayID: display.id)
+        }
+
+        model.settings.setBrightnessControlMode(mode, for: display)
+        model.save()
+        refreshBrightnessModeAvailability()
     }
 
     func checkForUpdates() {
@@ -233,7 +261,7 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
             let view = DebugView(model: model, viewModel: DebugViewModel(
                 displayProvider: self.displayProvider,
                 pointerLocator: self.pointerLocator,
-                brightness: self.brightnessControllers.controller(for: self.model.settings.brightnessControlMode)
+                brightness: self.brightnessControllerForCurrentPointerDisplay()
             ))
             let hosting = NSHostingView(rootView: view)
             let window = NSWindow(
@@ -264,7 +292,7 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         let diagnostics = DiagnosticsCollector(
             displayProvider: displayProvider,
             pointerLocator: pointerLocator,
-            brightness: brightnessControllers.controller(for: model.settings.brightnessControlMode)
+            brightness: brightnessControllerForCurrentPointerDisplay()
         ).snapshot()
         let context = IssueReportContext(
             version: Self.appVersion,
@@ -342,15 +370,20 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
 
     @discardableResult
     private func routeBrightness(direction: BrightnessDirection, source: String) -> BrightnessRoutingResult? {
-        if model.settings.brightnessControlMode == .system,
-           let display = currentPointerDisplay(),
-           CGDisplayIsBuiltin(display.id) == 0 {
-            model.runtimeStatus = "System brightness is unavailable for \(display.friendlyName)"
-            log.error("\(source) system brightness unavailable displayID=\(display.id) name=\(display.friendlyName)")
+        guard let targetDisplay = currentPointerDisplay() else {
+            model.runtimeStatus = "Could not find display under pointer"
+            log.error("\(source) route failed: no current pointer display")
             return nil
         }
 
-        let brightness = brightnessControllers.controller(for: model.settings.brightnessControlMode)
+        let mode = effectiveBrightnessControlMode(for: targetDisplay)
+        if mode == .system, !brightnessControllers.system.canControl(displayID: targetDisplay.id) {
+            model.runtimeStatus = "System brightness is unavailable for \(targetDisplay.friendlyName)"
+            log.error("\(source) system brightness unavailable displayID=\(targetDisplay.id) name=\(targetDisplay.friendlyName)")
+            return nil
+        }
+
+        let brightness = brightnessControllers.controller(for: mode)
         let router = BrightnessRouter(
             displayProvider: displayProvider,
             pointerLocator: pointerLocator,
@@ -367,10 +400,10 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         }
 
         log.info(
-            "\(source) routed mode=\(model.settings.brightnessControlMode.rawValue) direction=\(direction) pointer=\(DiagnosticsFormatter.point(result.pointerLocation)) displayID=\(result.display.id) bounds=\(DiagnosticsFormatter.rect(result.display.bounds)) old=\(result.adjustment.oldValue) new=\(result.adjustment.newValue)"
+            "\(source) routed mode=\(mode.rawValue) direction=\(direction) pointer=\(DiagnosticsFormatter.point(result.pointerLocation)) displayID=\(result.display.id) bounds=\(DiagnosticsFormatter.rect(result.display.bounds)) old=\(result.adjustment.oldValue) new=\(result.adjustment.newValue)"
         )
 
-        if model.settings.brightnessControlMode == .ddcCI,
+        if mode == .ddcCI,
            let error = brightnessControllers.ddcCI.lastError {
             model.runtimeStatus = "DDC/CI hardware write failed"
             log.error(error)
@@ -404,6 +437,38 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
             return display
         }
         return displays.first(where: \.isMain) ?? displays.first
+    }
+
+    private func brightnessControllerForCurrentPointerDisplay() -> BrightnessControlling {
+        guard let display = currentPointerDisplay() else {
+            return brightnessControllers.system
+        }
+        return brightnessControllers.controller(for: effectiveBrightnessControlMode(for: display))
+    }
+
+    private func externalDisplays() -> [ManagedDisplay] {
+        displayProvider.allKnownDisplays().filter { display in
+            !display.isBuiltin && display.isOnline && display.isActive
+        }
+    }
+
+    private func effectiveBrightnessControlMode(for display: ManagedDisplay) -> BrightnessControlMode {
+        effectiveBrightnessControlMode(
+            for: display,
+            systemAvailable: brightnessControllers.system.canControl(displayID: display.id)
+        )
+    }
+
+    private func effectiveBrightnessControlMode(for display: ManagedDisplay, systemAvailable: Bool) -> BrightnessControlMode {
+        if display.isBuiltin {
+            return .system
+        }
+
+        let configuredMode = model.settings.brightnessControlMode(for: display)
+        if configuredMode == .system, !systemAvailable {
+            return .ddcCI
+        }
+        return configuredMode
     }
 
     private func showSettingsWindow() {
@@ -1365,7 +1430,7 @@ struct SettingsView: View {
     }
 
     private var brightnessControlModePicker: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("Brightness control")
                     .font(.subheadline.weight(.semibold))
@@ -1379,24 +1444,48 @@ struct SettingsView: View {
                 .help("Refresh display capability")
             }
 
-            BrightnessModeSegmentedControl(selection: Binding(
-                get: { model.settings.brightnessControlMode },
-                set: { model.setBrightnessControlMode($0) }
-            ), isSystemAvailable: model.isSystemBrightnessModeAvailable)
-            .frame(maxWidth: .infinity)
-
-            Text(brightnessControlModeDetail)
-                .font(.caption)
-                .foregroundStyle(model.isSystemBrightnessModeAvailable ? Color.secondary : Color.orange)
-                .lineLimit(2)
+            if model.displayBrightnessModes.isEmpty {
+                Text("External displays will appear here.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(model.displayBrightnessModes) { state in
+                    displayBrightnessModeRow(state)
+                }
+            }
         }
     }
 
-    private var brightnessControlModeDetail: String {
-        if model.isSystemBrightnessModeAvailable {
-            return "System brightness is available for \(model.brightnessModeDisplayName)."
+    private func displayBrightnessModeRow(_ state: DisplayBrightnessModeState) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text(state.displayName)
+                    .font(.caption.weight(.medium))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer()
+                Text(state.isSystemAvailable ? "System available" : "System unavailable")
+                    .font(.caption2)
+                    .foregroundStyle(state.isSystemAvailable ? Color.secondary : Color.orange)
+            }
+
+            BrightnessModeSegmentedControl(
+                selection: displayModeBinding(for: state),
+                isSystemAvailable: state.isSystemAvailable
+            )
+            .frame(maxWidth: .infinity)
         }
-        return "System brightness is unavailable for \(model.brightnessModeDisplayName). Choose DDC/CI, Gamma, or Overlay."
+    }
+
+    private func displayModeBinding(for state: DisplayBrightnessModeState) -> Binding<BrightnessControlMode> {
+        Binding(
+            get: {
+                model.displayBrightnessModes.first(where: { $0.id == state.id })?.selectedMode ?? state.selectedMode
+            },
+            set: { mode in
+                model.setBrightnessControlMode(mode, for: state.id)
+            }
+        )
     }
 
     private var githubModule: some View {

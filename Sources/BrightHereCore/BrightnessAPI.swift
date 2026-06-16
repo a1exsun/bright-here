@@ -10,11 +10,19 @@ public protocol BrightnessControlling {
 
 public protocol BrightnessControlResetting {
     func reset()
+    func reset(displayID: DisplayID)
+}
+
+public extension BrightnessControlResetting {
+    func reset(displayID: DisplayID) {
+        reset()
+    }
 }
 
 public final class NativeBrightnessController: BrightnessControlling {
     private typealias DSGet = @convention(c) (DisplayID, UnsafeMutablePointer<Float>) -> Int32
     private typealias DSSet = @convention(c) (DisplayID, Float) -> Int32
+    private typealias DSCanChange = @convention(c) (DisplayID) -> Bool
     private typealias CDGet = @convention(c) (DisplayID) -> Double
     private typealias CDSet = @convention(c) (DisplayID, Double) -> Void
 
@@ -22,6 +30,7 @@ public final class NativeBrightnessController: BrightnessControlling {
     private let coreDisplay: UnsafeMutableRawPointer?
     private let dsGet: DSGet?
     private let dsSet: DSSet?
+    private let dsCanChange: DSCanChange?
     private let cdGet: CDGet?
     private let cdSet: CDSet?
 
@@ -31,6 +40,7 @@ public final class NativeBrightnessController: BrightnessControlling {
 
         dsGet = Self.load(displayServices, "DisplayServicesGetBrightness", as: DSGet.self)
         dsSet = Self.load(displayServices, "DisplayServicesSetBrightness", as: DSSet.self)
+        dsCanChange = Self.load(displayServices, "DisplayServicesCanChangeBrightness", as: DSCanChange.self)
         cdGet = Self.load(coreDisplay, "CoreDisplay_Display_GetUserBrightness", as: CDGet.self)
         cdSet = Self.load(coreDisplay, "CoreDisplay_Display_SetUserBrightness", as: CDSet.self)
     }
@@ -41,7 +51,7 @@ public final class NativeBrightnessController: BrightnessControlling {
     }
 
     public var backendSummary: String {
-        let ds = "DisplayServices get:\(dsGet != nil ? "yes" : "no") set:\(dsSet != nil ? "yes" : "no")"
+        let ds = "DisplayServices get:\(dsGet != nil ? "yes" : "no") set:\(dsSet != nil ? "yes" : "no") can:\(dsCanChange != nil ? "yes" : "no")"
         let cd = "CoreDisplay get:\(cdGet != nil ? "yes" : "no") set:\(cdSet != nil ? "yes" : "no")"
         return "\(ds); \(cd)"
     }
@@ -81,8 +91,8 @@ public final class NativeBrightnessController: BrightnessControlling {
     }
 
     public func canControl(displayID: DisplayID) -> Bool {
-        guard CGDisplayIsBuiltin(displayID) != 0 else {
-            return false
+        if let dsCanChange {
+            return dsCanChange(displayID)
         }
 
         return brightness(for: displayID) != nil && (dsSet != nil || cdSet != nil)

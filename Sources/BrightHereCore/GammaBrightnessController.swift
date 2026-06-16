@@ -72,6 +72,12 @@ public final class GammaBrightnessController: BrightnessControlling, BrightnessC
         values.removeAll()
     }
 
+    public func reset(displayID: DisplayID) {
+        _ = setBrightness(1, for: displayID)
+        originalFormulas.removeValue(forKey: displayID)
+        values.removeValue(forKey: displayID)
+    }
+
     private func originalFormula(for displayID: DisplayID) -> TransferFormula {
         if let formula = originalFormulas[displayID] {
             return formula

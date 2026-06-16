@@ -61,4 +61,16 @@ public struct ManagedDisplay: Identifiable, Equatable, Sendable {
         }
         return "Display #\(index)"
     }
+
+    public var settingsIdentity: String {
+        let vendor = CGDisplayVendorNumber(id)
+        let product = CGDisplayModelNumber(id)
+        let serial = CGDisplaySerialNumber(id)
+
+        if vendor != 0 || product != 0 || serial != 0 {
+            return "vendor:\(vendor):product:\(product):serial:\(serial)"
+        }
+
+        return "display:\(id)"
+    }
 }

@@ -26,7 +26,10 @@ struct SettingsStoreTests {
             showBrightnessOverlay: false,
             autoUpdateEnabled: false,
             brightnessStep: 0.1,
-            brightnessControlMode: .gamma
+            brightnessControlMode: .gamma,
+            displayBrightnessControlModes: [
+                "vendor:1:product:2:serial:3": .ddcCI
+            ]
         )
 
         store.save(expected)
@@ -62,6 +65,40 @@ struct SettingsStoreTests {
         let settings = UserDefaultsSettingsStore(defaults: defaults).load()
 
         #expect(settings.brightnessControlMode == .system)
+        #expect(settings.displayBrightnessControlModes.isEmpty)
+    }
+
+    @Test("uses display brightness control mode for external displays")
+    func usesDisplayBrightnessControlModeForExternalDisplays() {
+        var settings = AppSettings(brightnessControlMode: .gamma)
+        let external = ManagedDisplay(
+            index: 1,
+            id: 123,
+            bounds: .zero,
+            isMain: true,
+            isBuiltin: false,
+            isActive: true,
+            isOnline: true,
+            isAsleep: false,
+            source: "test"
+        )
+        let builtin = ManagedDisplay(
+            index: 2,
+            id: 456,
+            bounds: .zero,
+            isMain: false,
+            isBuiltin: true,
+            isActive: true,
+            isOnline: true,
+            isAsleep: false,
+            source: "test"
+        )
+
+        #expect(settings.brightnessControlMode(for: external) == .gamma)
+        settings.setBrightnessControlMode(.ddcCI, for: external)
+
+        #expect(settings.brightnessControlMode(for: external) == .ddcCI)
+        #expect(settings.brightnessControlMode(for: builtin) == .system)
     }
 
     @Test("migrates legacy default brightness step")
