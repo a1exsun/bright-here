@@ -17,10 +17,7 @@ fi
 
 RELEASE_NOTES="## What's Changed
 
-- Refine the brightness HUD with a native macOS glass panel, real display names, a white native slider, and hover-only slider thumb.
-- Add light and dark app artwork and simplify the README for end users.
-- Simplify settings: Bright Here is always active while running, with fewer controls and clearer permission messaging.
-- Keep the Debug Panel visible in local builds while hiding it from GitHub release builds.
+- Keep the brightness HUD title text and filled slider track permanently white in both light and dark appearances.
 - Use ad-hoc signing for public release artifacts until Developer ID signing is available.
 
 ## Install

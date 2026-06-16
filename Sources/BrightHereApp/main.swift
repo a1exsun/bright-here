@@ -781,7 +781,6 @@ final class BrightnessOverlayContentView: NSView {
 
     private func setupContent() {
         titleLabel.font = .systemFont(ofSize: 12, weight: .semibold)
-        titleLabel.textColor = .labelColor
         titleLabel.lineBreakMode = .byTruncatingTail
         titleLabel.maximumNumberOfLines = 1
         titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -793,7 +792,6 @@ final class BrightnessOverlayContentView: NSView {
         slider.minValue = 0
         slider.maxValue = 1
         slider.isContinuous = true
-        slider.trackFillColor = .white
         slider.showsKnob = false
         slider.target = self
         slider.action = #selector(sliderChanged)
@@ -824,6 +822,18 @@ final class BrightnessOverlayContentView: NSView {
             stack.trailingAnchor.constraint(equalTo: contentHost.trailingAnchor, constant: -15),
             stack.centerYAnchor.constraint(equalTo: contentHost.centerYAnchor)
         ])
+
+        applyFixedHUDColors()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyFixedHUDColors()
+    }
+
+    private func applyFixedHUDColors() {
+        titleLabel.textColor = .white
+        slider.trackFillColor = .white
     }
 
     private func iconView(symbolName: String, pointSize: CGFloat) -> NSImageView {
