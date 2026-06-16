@@ -13,6 +13,8 @@ final class AppModel: ObservableObject {
     @Published var runtimeStatus: String = "Ready"
     @Published var isAccessibilityTrusted = false
     @Published var isHotkeyListenerActive = false
+    @Published var brightnessModeDisplayName = "Current display"
+    @Published var isSystemBrightnessModeAvailable = true
 
     private let store: SettingsStoring
     private weak var coordinator: AppCoordinator?
@@ -29,9 +31,23 @@ final class AppModel: ObservableObject {
         coordinator?.settingsDidChange(settings)
     }
 
+    func setBrightnessControlMode(_ mode: BrightnessControlMode) {
+        guard mode != .system || isSystemBrightnessModeAvailable else {
+            runtimeStatus = "System brightness is unavailable for \(brightnessModeDisplayName)"
+            return
+        }
+
+        settings.brightnessControlMode = mode
+        save()
+    }
+
     func refreshPermissionStatus() {
         isAccessibilityTrusted = PermissionController.isAccessibilityTrusted
         permissionStatus = isAccessibilityTrusted ? "Accessibility permission granted" : "Accessibility permission required"
+    }
+
+    func refreshBrightnessModeAvailability() {
+        coordinator?.refreshBrightnessModeAvailability()
     }
 
     func setHotkeyListenerActive(_ active: Bool) {
@@ -86,13 +102,38 @@ final class AppModel: ObservableObject {
 }
 
 @MainActor
+private final class BrightnessControllerRegistry {
+    let system = NativeBrightnessController()
+    let ddcCI = DDCBrightnessController()
+    let gamma = GammaBrightnessController()
+    let overlay = OverlayBrightnessController()
+
+    func controller(for mode: BrightnessControlMode) -> BrightnessControlling {
+        switch mode {
+        case .system:
+            system
+        case .ddcCI:
+            ddcCI
+        case .gamma:
+            gamma
+        case .overlay:
+            overlay
+        }
+    }
+
+    func reset(mode: BrightnessControlMode) {
+        (controller(for: mode) as? BrightnessControlResetting)?.reset()
+    }
+}
+
+@MainActor
 final class AppCoordinator: NSObject, NSApplicationDelegate {
     private static let showSettingsNotification = Notification.Name("dev.xsun.brighthere.showSettings")
     private let store = UserDefaultsSettingsStore()
     private let displayProvider = CoreGraphicsDisplayProvider()
     private let pointerLocator = CoreGraphicsPointerLocator()
-    private let brightness = NativeBrightnessController()
     private let locator = DisplayLocator()
+    private let brightnessControllers = BrightnessControllerRegistry()
     private let decoder = SystemDefinedEventDecoder()
     private let log = AppLog()
     private let brightnessOverlay = BrightnessOverlayPresenter()
@@ -107,6 +148,7 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
     private var eventTap: EventTapController?
     private var eventTapStarted = false
     private var didLogMissingAccessibilityPermission = false
+    private var activeBrightnessControlMode: BrightnessControlMode?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -143,9 +185,29 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
     }
 
     func settingsDidChange(_ settings: AppSettings) {
+        if let previous = activeBrightnessControlMode, previous != settings.brightnessControlMode {
+            brightnessControllers.reset(mode: previous)
+        }
+        activeBrightnessControlMode = settings.brightnessControlMode
+
         configureStatusItem(show: settings.showMenuBarIcon)
         updater.applySettings(settings)
         model?.refreshPermissionStatus()
+    }
+
+    func refreshBrightnessModeAvailability() {
+        guard let model, PermissionController.isAccessibilityTrusted else {
+            return
+        }
+
+        guard let display = currentPointerDisplay() else {
+            model.brightnessModeDisplayName = "Current display"
+            model.isSystemBrightnessModeAvailable = false
+            return
+        }
+
+        model.brightnessModeDisplayName = display.friendlyName
+        model.isSystemBrightnessModeAvailable = brightnessControllers.system.canControl(displayID: display.id)
     }
 
     func checkForUpdates() {
@@ -171,7 +233,7 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
             let view = DebugView(model: model, viewModel: DebugViewModel(
                 displayProvider: self.displayProvider,
                 pointerLocator: self.pointerLocator,
-                brightness: self.brightness
+                brightness: self.brightnessControllers.controller(for: self.model.settings.brightnessControlMode)
             ))
             let hosting = NSHostingView(rootView: view)
             let window = NSWindow(
@@ -202,7 +264,7 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         let diagnostics = DiagnosticsCollector(
             displayProvider: displayProvider,
             pointerLocator: pointerLocator,
-            brightness: brightness
+            brightness: brightnessControllers.controller(for: model.settings.brightnessControlMode)
         ).snapshot()
         let context = IssueReportContext(
             version: Self.appVersion,
@@ -280,6 +342,15 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
 
     @discardableResult
     private func routeBrightness(direction: BrightnessDirection, source: String) -> BrightnessRoutingResult? {
+        if model.settings.brightnessControlMode == .system,
+           let display = currentPointerDisplay(),
+           CGDisplayIsBuiltin(display.id) == 0 {
+            model.runtimeStatus = "System brightness is unavailable for \(display.friendlyName)"
+            log.error("\(source) system brightness unavailable displayID=\(display.id) name=\(display.friendlyName)")
+            return nil
+        }
+
+        let brightness = brightnessControllers.controller(for: model.settings.brightnessControlMode)
         let router = BrightnessRouter(
             displayProvider: displayProvider,
             pointerLocator: pointerLocator,
@@ -296,8 +367,14 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         }
 
         log.info(
-            "\(source) routed direction=\(direction) pointer=\(DiagnosticsFormatter.point(result.pointerLocation)) displayID=\(result.display.id) bounds=\(DiagnosticsFormatter.rect(result.display.bounds)) old=\(result.adjustment.oldValue) new=\(result.adjustment.newValue)"
+            "\(source) routed mode=\(model.settings.brightnessControlMode.rawValue) direction=\(direction) pointer=\(DiagnosticsFormatter.point(result.pointerLocation)) displayID=\(result.display.id) bounds=\(DiagnosticsFormatter.rect(result.display.bounds)) old=\(result.adjustment.oldValue) new=\(result.adjustment.newValue)"
         )
+
+        if model.settings.brightnessControlMode == .ddcCI,
+           let error = brightnessControllers.ddcCI.lastError {
+            model.runtimeStatus = "DDC/CI hardware write failed"
+            log.error(error)
+        }
 
         if model.settings.showBrightnessOverlay {
             let display = result.display
@@ -309,7 +386,7 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
                         return
                     }
 
-                    guard self.brightness.setBrightness(value, for: display.id) else {
+                    guard brightness.setBrightness(value, for: display.id) else {
                         self.model.runtimeStatus = "Could not set brightness from slider"
                         self.log.error("overlay slider failed displayID=\(display.id) value=\(value)")
                         return
@@ -318,6 +395,15 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
             )
         }
         return result
+    }
+
+    private func currentPointerDisplay() -> ManagedDisplay? {
+        let displays = displayProvider.allKnownDisplays()
+        if let point = pointerLocator.currentPointerLocation(),
+           let display = locator.display(containing: point, displays: displays) {
+            return display
+        }
+        return displays.first(where: \.isMain) ?? displays.first
     }
 
     private func showSettingsWindow() {
@@ -918,6 +1004,78 @@ final class BrightnessOverlayPanel: NSPanel {
 }
 
 @MainActor
+final class OverlayBrightnessController: @preconcurrency BrightnessControlling, @preconcurrency BrightnessControlResetting {
+    private var values: [DisplayID: Float] = [:]
+    private var windows: [DisplayID: NSWindow] = [:]
+
+    func brightness(for displayID: DisplayID) -> Float? {
+        values[displayID] ?? 1
+    }
+
+    @discardableResult
+    func setBrightness(_ brightness: Float, for displayID: DisplayID) -> Bool {
+        let value = min(max(brightness, 0), 1)
+        values[displayID] = value
+        setOverlayOpacity(1 - value, for: displayID)
+        return true
+    }
+
+    func reset() {
+        for window in windows.values {
+            window.orderOut(nil)
+        }
+        windows.removeAll()
+        values.removeAll()
+    }
+
+    private func setOverlayOpacity(_ opacity: Float, for displayID: DisplayID) {
+        guard opacity > 0.005 else {
+            windows[displayID]?.orderOut(nil)
+            values[displayID] = 1
+            return
+        }
+
+        guard let screen = screen(for: displayID) else {
+            return
+        }
+
+        let window = windows[displayID] ?? makeOverlayWindow()
+        windows[displayID] = window
+        window.setFrame(screen.frame, display: true)
+        window.backgroundColor = NSColor.black.withAlphaComponent(CGFloat(min(opacity, 0.85)))
+        window.orderFrontRegardless()
+    }
+
+    private func makeOverlayWindow() -> NSWindow {
+        let window = NSWindow(
+            contentRect: .zero,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.hasShadow = false
+        window.ignoresMouseEvents = true
+        window.hidesOnDeactivate = false
+        window.isReleasedWhenClosed = false
+        window.animationBehavior = .none
+        window.level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue - 1)
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle, .stationary]
+        return window
+    }
+
+    private func screen(for displayID: DisplayID) -> NSScreen? {
+        NSScreen.screens.first { screen in
+            guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
+                return false
+            }
+            return number.uint32Value == displayID
+        }
+    }
+}
+
+@MainActor
 final class SparkleUpdateController: NSObject, SPUUpdaterDelegate {
     private static let dailyUpdateCheckInterval: TimeInterval = 24 * 60 * 60
 
@@ -1033,6 +1191,7 @@ final class DebugViewModel: ObservableObject {
 struct SettingsView: View {
     @ObservedObject var model: AppModel
     @Environment(\.colorScheme) private var colorScheme
+    private let capabilityRefreshTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1067,6 +1226,17 @@ struct SettingsView: View {
         .frame(width: 540)
         .onAppear {
             model.refreshPermissionStatus()
+            model.refreshBrightnessModeAvailability()
+        }
+        .onChange(of: model.isAccessibilityTrusted) { _, isTrusted in
+            if isTrusted {
+                model.refreshBrightnessModeAvailability()
+            }
+        }
+        .onReceive(capabilityRefreshTimer) { _ in
+            if model.isAccessibilityTrusted {
+                model.refreshBrightnessModeAvailability()
+            }
         }
     }
 
@@ -1155,6 +1325,10 @@ struct SettingsView: View {
 
     private var controls: some View {
         VStack(alignment: .leading, spacing: 14) {
+            if model.isAccessibilityTrusted {
+                brightnessControlModePicker
+            }
+
             Toggle("Show brightness overlay", isOn: binding(\.showBrightnessOverlay))
             Toggle("Automatic updates", isOn: binding(\.autoUpdateEnabled))
             Toggle("Launch at login", isOn: Binding(
@@ -1188,6 +1362,41 @@ struct SettingsView: View {
         }
         .padding(14)
         .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private var brightnessControlModePicker: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Brightness control")
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Button {
+                    model.refreshBrightnessModeAvailability()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(.borderless)
+                .help("Refresh display capability")
+            }
+
+            BrightnessModeSegmentedControl(selection: Binding(
+                get: { model.settings.brightnessControlMode },
+                set: { model.setBrightnessControlMode($0) }
+            ), isSystemAvailable: model.isSystemBrightnessModeAvailable)
+            .frame(maxWidth: .infinity)
+
+            Text(brightnessControlModeDetail)
+                .font(.caption)
+                .foregroundStyle(model.isSystemBrightnessModeAvailable ? Color.secondary : Color.orange)
+                .lineLimit(2)
+        }
+    }
+
+    private var brightnessControlModeDetail: String {
+        if model.isSystemBrightnessModeAvailable {
+            return "System brightness is available for \(model.brightnessModeDisplayName)."
+        }
+        return "System brightness is unavailable for \(model.brightnessModeDisplayName). Choose DDC/CI, Gamma, or Overlay."
     }
 
     private var githubModule: some View {
@@ -1225,6 +1434,72 @@ struct SettingsView: View {
                 model.save()
             }
         )
+    }
+}
+
+private extension BrightnessControlMode {
+    var settingsTitle: String {
+        switch self {
+        case .system:
+            "System"
+        case .ddcCI:
+            "DDC/CI"
+        case .gamma:
+            "Gamma"
+        case .overlay:
+            "Overlay"
+        }
+    }
+}
+
+private struct BrightnessModeSegmentedControl: NSViewRepresentable {
+    @Binding var selection: BrightnessControlMode
+    let isSystemAvailable: Bool
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    func makeNSView(context: Context) -> NSSegmentedControl {
+        let control = NSSegmentedControl(
+            labels: BrightnessControlMode.allCases.map(\.settingsTitle),
+            trackingMode: .selectOne,
+            target: context.coordinator,
+            action: #selector(Coordinator.changed(_:))
+        )
+        control.segmentStyle = .automatic
+        control.segmentDistribution = .fillEqually
+        control.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        control.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return control
+    }
+
+    func updateNSView(_ control: NSSegmentedControl, context: Context) {
+        context.coordinator.parent = self
+        control.segmentDistribution = .fillEqually
+
+        for (index, mode) in BrightnessControlMode.allCases.enumerated() {
+            control.setLabel(mode.settingsTitle, forSegment: index)
+            control.setEnabled(mode != .system || isSystemAvailable, forSegment: index)
+        }
+
+        control.selectedSegment = BrightnessControlMode.allCases.firstIndex(of: selection) ?? 0
+    }
+
+    final class Coordinator: NSObject {
+        var parent: BrightnessModeSegmentedControl
+
+        init(_ parent: BrightnessModeSegmentedControl) {
+            self.parent = parent
+        }
+
+        @MainActor @objc func changed(_ sender: NSSegmentedControl) {
+            let index = sender.selectedSegment
+            guard BrightnessControlMode.allCases.indices.contains(index) else {
+                return
+            }
+            parent.selection = BrightnessControlMode.allCases[index]
+        }
     }
 }
 
