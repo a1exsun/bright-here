@@ -726,7 +726,7 @@ final class BrightnessOverlayContentView: NSView {
         glass.setValue(contentView, forKey: "contentView")
         glass.setValue(cornerRadius, forKey: "cornerRadius")
         if glass.responds(to: NSSelectorFromString("setTintColor:")) {
-            glass.setValue(NSColor.systemGray.withAlphaComponent(0.32), forKey: "tintColor")
+            glass.setValue(NSColor.black.withAlphaComponent(0.18), forKey: "tintColor")
         }
         return glass
     }
@@ -881,7 +881,7 @@ final class BrightnessOverlayContentView: NSView {
         image?.isTemplate = true
 
         let view = NSImageView(image: image ?? NSImage())
-        view.contentTintColor = .labelColor
+        view.contentTintColor = .white
         view.translatesAutoresizingMaskIntoConstraints = false
         view.setContentHuggingPriority(.required, for: .horizontal)
         view.setContentCompressionResistancePriority(.required, for: .horizontal)
