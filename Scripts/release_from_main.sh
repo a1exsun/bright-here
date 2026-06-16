@@ -18,8 +18,10 @@ fi
 
 RELEASE_NOTES="## What's Changed
 
-- Keep the HUD brightness icons permanently white in both light and dark appearances.
-- Adjust the HUD glass tint to pure black at 18% opacity.
+- Rebuild the brightness HUD content with native SwiftUI controls.
+- Use the native SwiftUI Slider in both the main panel and HUD.
+- Keep macOS 15 compatibility while simplifying fallback code.
+- Adjust the HUD glass tint to pure black at 22% opacity.
 
 ## Install
 

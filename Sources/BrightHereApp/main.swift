@@ -517,17 +517,10 @@ enum PermissionController {
 
 enum LoginItemController {
     static var isEnabled: Bool {
-        if #available(macOS 13.0, *) {
-            return SMAppService.mainApp.status == .enabled
-        }
-        return false
+        SMAppService.mainApp.status == .enabled
     }
 
     static func setEnabled(_ enabled: Bool) throws {
-        guard #available(macOS 13.0, *) else {
-            return
-        }
-
         if enabled {
             if SMAppService.mainApp.status != .enabled {
                 try SMAppService.mainApp.register()
@@ -681,40 +674,42 @@ final class BrightnessOverlayContentView: NSView {
 
     private let cardView: NSView
     private let contentHost: NSView
-    private let usesGlassEffect: Bool
     private let cornerRadius: CGFloat = 26
-    private let titleLabel = NSTextField(labelWithString: "")
-    private let slider = BrightnessOverlaySlider(frame: .zero)
+    private let hudModel = BrightnessOverlayHUDModel()
+    private lazy var hudHost = NSHostingView(rootView: BrightnessOverlayHUDView(model: hudModel))
     private var trackingArea: NSTrackingArea?
-    private var onValueChange: ((Float) -> Void)?
-    private var onEditingChanged: ((Bool) -> Void)?
     private var onHoverChanged: ((Bool) -> Void)?
     private var isHovering = false
 
     override init(frame frameRect: NSRect) {
         let host = NSView()
         host.translatesAutoresizingMaskIntoConstraints = false
-
-        if #available(macOS 26.0, *), let glass = Self.makeGlassEffectView(contentView: host, cornerRadius: cornerRadius) {
-            cardView = glass
-            usesGlassEffect = true
-        } else {
-            let visual = NSVisualEffectView()
-            visual.material = .hudWindow
-            visual.blendingMode = .behindWindow
-            visual.state = .active
-            visual.addSubview(host)
-            cardView = visual
-            usesGlassEffect = false
-        }
-
         contentHost = host
+        cardView = Self.makeBackdropView(contentView: host, cornerRadius: cornerRadius)
         super.init(frame: frameRect)
         setupView()
     }
 
     required init?(coder: NSCoder) {
         nil
+    }
+
+    private static func makeBackdropView(contentView: NSView, cornerRadius: CGFloat) -> NSView {
+        if #available(macOS 26.0, *),
+           let glass = makeGlassEffectView(contentView: contentView, cornerRadius: cornerRadius) {
+            return glass
+        }
+
+        let visual = NSVisualEffectView()
+        visual.material = .hudWindow
+        visual.blendingMode = .behindWindow
+        visual.state = .active
+        visual.addSubview(contentView)
+        visual.wantsLayer = true
+        visual.layer?.cornerRadius = cornerRadius
+        visual.layer?.cornerCurve = .continuous
+        visual.layer?.masksToBounds = true
+        return visual
     }
 
     private static func makeGlassEffectView(contentView: NSView, cornerRadius: CGFloat) -> NSView? {
@@ -726,7 +721,7 @@ final class BrightnessOverlayContentView: NSView {
         glass.setValue(contentView, forKey: "contentView")
         glass.setValue(cornerRadius, forKey: "cornerRadius")
         if glass.responds(to: NSSelectorFromString("setTintColor:")) {
-            glass.setValue(NSColor.black.withAlphaComponent(0.18), forKey: "tintColor")
+            glass.setValue(NSColor.black.withAlphaComponent(0.22), forKey: "tintColor")
         }
         return glass
     }
@@ -738,16 +733,15 @@ final class BrightnessOverlayContentView: NSView {
         onEditingChanged: @escaping (Bool) -> Void,
         onHoverChanged: @escaping (Bool) -> Void
     ) {
-        titleLabel.stringValue = displayName
-        slider.doubleValue = Double(level.normalizedValue)
-        self.onValueChange = onValueChange
-        self.onEditingChanged = onEditingChanged
+        hudModel.displayName = displayName
+        hudModel.brightness = Double(level.normalizedValue)
+        hudModel.onValueChange = onValueChange
+        hudModel.onEditingChanged = onEditingChanged
         self.onHoverChanged = onHoverChanged
     }
 
     func resetHoverState() {
         isHovering = false
-        slider.showsKnob = false
     }
 
     func syncHoverStateWithMouseLocation() {
@@ -791,12 +785,6 @@ final class BrightnessOverlayContentView: NSView {
 
     private func setupCard() {
         cardView.translatesAutoresizingMaskIntoConstraints = false
-        if !usesGlassEffect {
-            cardView.wantsLayer = true
-            cardView.layer?.cornerRadius = cornerRadius
-            cardView.layer?.cornerCurve = .continuous
-            cardView.layer?.masksToBounds = true
-        }
         addSubview(cardView)
 
         NSLayoutConstraint.activate([
@@ -817,75 +805,17 @@ final class BrightnessOverlayContentView: NSView {
     }
 
     private func setupContent() {
-        titleLabel.font = .systemFont(ofSize: 12, weight: .semibold)
-        titleLabel.lineBreakMode = .byTruncatingTail
-        titleLabel.maximumNumberOfLines = 1
-        titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-
-        let minimumIcon = iconView(symbolName: "sun.min.fill", pointSize: 12)
-        let maximumIcon = iconView(symbolName: "sun.max.fill", pointSize: 13)
-
-        slider.controlSize = .small
-        slider.minValue = 0
-        slider.maxValue = 1
-        slider.isContinuous = true
-        slider.showsKnob = false
-        slider.target = self
-        slider.action = #selector(sliderChanged)
-        slider.onEditingChanged = { [weak self] editing in
-            self?.onEditingChanged?(editing)
-        }
-        slider.translatesAutoresizingMaskIntoConstraints = false
-
-        let row = NSStackView(views: [minimumIcon, slider, maximumIcon])
-        row.orientation = .horizontal
-        row.alignment = .centerY
-        row.spacing = 7
-        row.translatesAutoresizingMaskIntoConstraints = false
-
-        let stack = NSStackView(views: [titleLabel, row])
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 5
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        contentHost.addSubview(stack)
+        hudHost.translatesAutoresizingMaskIntoConstraints = false
+        hudHost.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        hudHost.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        contentHost.addSubview(hudHost)
 
         NSLayoutConstraint.activate([
-            minimumIcon.widthAnchor.constraint(equalToConstant: 15),
-            maximumIcon.widthAnchor.constraint(equalToConstant: 17),
-            slider.widthAnchor.constraint(greaterThanOrEqualToConstant: 166),
-            row.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            stack.leadingAnchor.constraint(equalTo: contentHost.leadingAnchor, constant: 15),
-            stack.trailingAnchor.constraint(equalTo: contentHost.trailingAnchor, constant: -15),
-            stack.centerYAnchor.constraint(equalTo: contentHost.centerYAnchor)
+            hudHost.leadingAnchor.constraint(equalTo: contentHost.leadingAnchor),
+            hudHost.trailingAnchor.constraint(equalTo: contentHost.trailingAnchor),
+            hudHost.topAnchor.constraint(equalTo: contentHost.topAnchor),
+            hudHost.bottomAnchor.constraint(equalTo: contentHost.bottomAnchor)
         ])
-
-        applyFixedHUDColors()
-    }
-
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        applyFixedHUDColors()
-    }
-
-    private func applyFixedHUDColors() {
-        titleLabel.textColor = .white
-        slider.trackFillColor = .white
-        slider.fixedFillColor = .white
-    }
-
-    private func iconView(symbolName: String, pointSize: CGFloat) -> NSImageView {
-        let configuration = NSImage.SymbolConfiguration(pointSize: pointSize, weight: .semibold)
-        let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)?
-            .withSymbolConfiguration(configuration)
-        image?.isTemplate = true
-
-        let view = NSImageView(image: image ?? NSImage())
-        view.contentTintColor = .white
-        view.translatesAutoresizingMaskIntoConstraints = false
-        view.setContentHuggingPriority(.required, for: .horizontal)
-        view.setContentCompressionResistancePriority(.required, for: .horizontal)
-        return view
     }
 
     private func setHovering(_ hovering: Bool) {
@@ -894,114 +824,67 @@ final class BrightnessOverlayContentView: NSView {
         }
 
         isHovering = hovering
-        slider.showsKnob = hovering
         onHoverChanged?(hovering)
-    }
-
-    @objc private func sliderChanged() {
-        onValueChange?(Float(slider.doubleValue))
     }
 }
 
 @MainActor
-final class BrightnessOverlaySlider: NSSlider {
+final class BrightnessOverlayHUDModel: ObservableObject {
+    @Published var displayName: String = ""
+    @Published var brightness: Double = 0
     var onEditingChanged: ((Bool) -> Void)?
-    var fixedFillColor = NSColor.white {
-        didSet {
-            (cell as? BrightnessOverlaySliderCell)?.fixedFillColor = fixedFillColor
-            needsDisplay = true
-        }
-    }
-    var showsKnob = true {
-        didSet {
-            guard oldValue != showsKnob else {
-                return
-            }
-            (cell as? BrightnessOverlaySliderCell)?.showsKnob = showsKnob
-            needsDisplay = true
-        }
-    }
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        installCell()
-    }
-
-    required init?(coder: NSCoder) {
-        super.init(coder: coder)
-        installCell()
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        onEditingChanged?(true)
-        super.mouseDown(with: event)
-        onEditingChanged?(false)
-    }
-
-    private func installCell() {
-        let sliderCell = BrightnessOverlaySliderCell()
-        sliderCell.minValue = minValue
-        sliderCell.maxValue = maxValue
-        sliderCell.doubleValue = doubleValue
-        sliderCell.isContinuous = isContinuous
-        sliderCell.controlSize = controlSize
-        sliderCell.showsKnob = showsKnob
-        sliderCell.fixedFillColor = fixedFillColor
-        cell = sliderCell
-    }
+    var onValueChange: ((Float) -> Void)?
 }
 
-final class BrightnessOverlaySliderCell: NSSliderCell {
-    var showsKnob = true
-    var fixedFillColor = NSColor.white
+private struct BrightnessOverlayHUDView: View {
+    @ObservedObject var model: BrightnessOverlayHUDModel
 
-    override func drawBar(inside rect: NSRect, flipped: Bool) {
-        super.drawBar(inside: rect, flipped: flipped)
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(model.displayName)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-        let range = maxValue - minValue
-        guard range > 0 else {
-            return
+            HStack(spacing: 7) {
+                Image(systemName: "sun.min.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 15)
+
+                brightnessSlider
+
+                Image(systemName: "sun.max.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 17)
+            }
         }
-
-        let progress = min(max((doubleValue - minValue) / range, 0), 1)
-        guard progress > 0 else {
-            return
-        }
-
-        let trackHeight: CGFloat = 4
-        let trackRect = NSRect(
-            x: rect.minX,
-            y: rect.midY - trackHeight / 2,
-            width: rect.width,
-            height: trackHeight
-        )
-        let fillRect = NSRect(
-            x: trackRect.minX,
-            y: trackRect.minY,
-            width: trackRect.width * CGFloat(progress),
-            height: trackRect.height
-        )
-
-        fixedFillColor.setFill()
-        NSBezierPath(
-            roundedRect: fillRect,
-            xRadius: trackHeight / 2,
-            yRadius: trackHeight / 2
-        ).fill()
+        .padding(.leading, 15)
+        .padding(.trailing, 12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
     }
 
-    override func drawKnob(_ knobRect: NSRect) {
-        guard showsKnob else {
-            return
-        }
-        super.drawKnob(knobRect)
-    }
-
-    override func drawKnob() {
-        guard showsKnob else {
-            return
-        }
-        super.drawKnob()
+    private var brightnessSlider: some View {
+        Slider(
+            value: Binding(
+                get: { model.brightness },
+                set: {
+                    model.brightness = $0
+                    model.onValueChange?(Float($0))
+                }
+            ),
+            in: 0...1,
+            onEditingChanged: { editing in
+                model.onEditingChanged?(editing)
+            }
+        )
+        .controlSize(.small)
+        .tint(.white)
+        .frame(height: 20)
+        .padding(.trailing, -4)
     }
 }
 
