@@ -661,11 +661,7 @@ final class BrightnessOverlayContentView: NSView {
         let host = NSView()
         host.translatesAutoresizingMaskIntoConstraints = false
 
-        if #available(macOS 26.0, *) {
-            let glass = NSGlassEffectView()
-            glass.contentView = host
-            glass.cornerRadius = cornerRadius
-            glass.style = .regular
+        if #available(macOS 26.0, *), let glass = Self.makeGlassEffectView(contentView: host, cornerRadius: cornerRadius) {
             cardView = glass
             usesGlassEffect = true
         } else {
@@ -685,6 +681,17 @@ final class BrightnessOverlayContentView: NSView {
 
     required init?(coder: NSCoder) {
         nil
+    }
+
+    private static func makeGlassEffectView(contentView: NSView, cornerRadius: CGFloat) -> NSView? {
+        guard let glassClass = NSClassFromString("NSGlassEffectView") as? NSView.Type else {
+            return nil
+        }
+
+        let glass = glassClass.init(frame: .zero)
+        glass.setValue(contentView, forKey: "contentView")
+        glass.setValue(cornerRadius, forKey: "cornerRadius")
+        return glass
     }
 
     func configure(
