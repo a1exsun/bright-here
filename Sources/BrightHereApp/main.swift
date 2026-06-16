@@ -721,7 +721,7 @@ final class BrightnessOverlayContentView: NSView {
         glass.setValue(contentView, forKey: "contentView")
         glass.setValue(cornerRadius, forKey: "cornerRadius")
         if glass.responds(to: NSSelectorFromString("setTintColor:")) {
-            glass.setValue(NSColor.black.withAlphaComponent(0.22), forKey: "tintColor")
+            glass.setValue(NSColor.black.withAlphaComponent(0.16), forKey: "tintColor")
         }
         return glass
     }
