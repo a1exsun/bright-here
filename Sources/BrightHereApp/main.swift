@@ -684,12 +684,15 @@ final class BrightnessOverlayContentView: NSView {
     private let usesGlassEffect: Bool
     private let cornerRadius: CGFloat = 26
     private let titleLabel = NSTextField(labelWithString: "")
+    private let sliderContainer = NSView()
     private let slider = BrightnessOverlaySlider(frame: .zero)
+    private var sliderGlassBackground: NSView?
     private var trackingArea: NSTrackingArea?
     private var onValueChange: ((Float) -> Void)?
     private var onEditingChanged: ((Bool) -> Void)?
     private var onHoverChanged: ((Bool) -> Void)?
     private var isHovering = false
+    private var isSliderEditing = false
 
     override init(frame frameRect: NSRect) {
         let host = NSView()
@@ -731,6 +734,19 @@ final class BrightnessOverlayContentView: NSView {
         return glass
     }
 
+    private static func makeGlassBackgroundView(cornerRadius: CGFloat) -> NSView? {
+        guard let glassClass = NSClassFromString("NSGlassEffectView") as? NSView.Type else {
+            return nil
+        }
+
+        let glass = glassClass.init(frame: .zero)
+        glass.setValue(cornerRadius, forKey: "cornerRadius")
+        if glass.responds(to: NSSelectorFromString("setEffectIsInteractive:")) {
+            glass.setValue(true, forKey: "effectIsInteractive")
+        }
+        return glass
+    }
+
     func configure(
         level: BrightnessIndicatorState,
         displayName: String,
@@ -747,7 +763,9 @@ final class BrightnessOverlayContentView: NSView {
 
     func resetHoverState() {
         isHovering = false
+        isSliderEditing = false
         slider.showsKnob = false
+        updateSliderGlassVisibility()
     }
 
     func syncHoverStateWithMouseLocation() {
@@ -833,11 +851,17 @@ final class BrightnessOverlayContentView: NSView {
         slider.target = self
         slider.action = #selector(sliderChanged)
         slider.onEditingChanged = { [weak self] editing in
+            self?.isSliderEditing = editing
+            self?.slider.showsKnob = editing || (self?.isHovering ?? false)
+            self?.updateSliderGlassVisibility()
             self?.onEditingChanged?(editing)
         }
         slider.translatesAutoresizingMaskIntoConstraints = false
 
-        let row = NSStackView(views: [minimumIcon, slider, maximumIcon])
+        sliderContainer.translatesAutoresizingMaskIntoConstraints = false
+        setupSliderGlassContainer()
+
+        let row = NSStackView(views: [minimumIcon, sliderContainer, maximumIcon])
         row.orientation = .horizontal
         row.alignment = .centerY
         row.spacing = 7
@@ -853,7 +877,8 @@ final class BrightnessOverlayContentView: NSView {
         NSLayoutConstraint.activate([
             minimumIcon.widthAnchor.constraint(equalToConstant: 15),
             maximumIcon.widthAnchor.constraint(equalToConstant: 17),
-            slider.widthAnchor.constraint(greaterThanOrEqualToConstant: 166),
+            sliderContainer.widthAnchor.constraint(greaterThanOrEqualToConstant: 166),
+            sliderContainer.heightAnchor.constraint(equalToConstant: 20),
             row.widthAnchor.constraint(equalTo: stack.widthAnchor),
             stack.leadingAnchor.constraint(equalTo: contentHost.leadingAnchor, constant: 15),
             stack.trailingAnchor.constraint(equalTo: contentHost.trailingAnchor, constant: -15),
@@ -861,6 +886,42 @@ final class BrightnessOverlayContentView: NSView {
         ])
 
         applyFixedHUDColors()
+    }
+
+    private func setupSliderGlassContainer() {
+        if slider.superview == sliderContainer {
+            return
+        }
+
+        let background: NSView
+        if #available(macOS 26.0, *), let glass = Self.makeGlassBackgroundView(cornerRadius: 10) {
+            background = glass
+        } else {
+            let visual = NSVisualEffectView()
+            visual.material = .hudWindow
+            visual.blendingMode = .behindWindow
+            visual.state = .active
+            visual.wantsLayer = true
+            visual.layer?.cornerRadius = 10
+            visual.layer?.cornerCurve = .continuous
+            background = visual
+        }
+
+        background.alphaValue = 0
+        background.translatesAutoresizingMaskIntoConstraints = false
+        sliderGlassBackground = background
+        sliderContainer.addSubview(background)
+        sliderContainer.addSubview(slider)
+
+        NSLayoutConstraint.activate([
+            background.leadingAnchor.constraint(equalTo: sliderContainer.leadingAnchor),
+            background.trailingAnchor.constraint(equalTo: sliderContainer.trailingAnchor),
+            background.topAnchor.constraint(equalTo: sliderContainer.topAnchor),
+            background.bottomAnchor.constraint(equalTo: sliderContainer.bottomAnchor),
+            slider.leadingAnchor.constraint(equalTo: sliderContainer.leadingAnchor, constant: 7),
+            slider.trailingAnchor.constraint(equalTo: sliderContainer.trailingAnchor, constant: -7),
+            slider.centerYAnchor.constraint(equalTo: sliderContainer.centerYAnchor)
+        ])
     }
 
     override func viewDidChangeEffectiveAppearance() {
@@ -894,8 +955,14 @@ final class BrightnessOverlayContentView: NSView {
         }
 
         isHovering = hovering
-        slider.showsKnob = hovering
+        slider.showsKnob = hovering || isSliderEditing
+        updateSliderGlassVisibility()
         onHoverChanged?(hovering)
+    }
+
+    private func updateSliderGlassVisibility() {
+        let isActive = isHovering || isSliderEditing
+        sliderGlassBackground?.animator().alphaValue = isActive ? 1 : 0
     }
 
     @objc private func sliderChanged() {
@@ -1150,6 +1217,8 @@ final class DebugViewModel: ObservableObject {
 struct SettingsView: View {
     @ObservedObject var model: AppModel
     @Environment(\.colorScheme) private var colorScheme
+    @State private var isStepSliderHovering = false
+    @State private var isStepSliderEditing = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1285,13 +1354,7 @@ struct SettingsView: View {
 
             HStack {
                 Text("Step")
-                Slider(value: Binding(
-                    get: { Double(model.settings.brightnessStep) },
-                    set: {
-                        model.settings.brightnessStep = Float($0)
-                        model.save()
-                    }
-                ), in: 0.005...0.08)
+                stepSlider
                 Text(String(format: "%.1f%%", model.settings.brightnessStep * 100))
                     .frame(width: 50, alignment: .trailing)
                     .monospacedDigit()
@@ -1305,6 +1368,28 @@ struct SettingsView: View {
         }
         .padding(14)
         .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private var stepSlider: some View {
+        Slider(
+            value: Binding(
+                get: { Double(model.settings.brightnessStep) },
+                set: {
+                    model.settings.brightnessStep = Float($0)
+                    model.save()
+                }
+            ),
+            in: 0.005...0.08,
+            onEditingChanged: { editing in
+                isStepSliderEditing = editing
+            }
+        )
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .modifier(GlassSliderChrome(isActive: isStepSliderHovering || isStepSliderEditing))
+        .onHover { hovering in
+            isStepSliderHovering = hovering
+        }
     }
 
     private var githubModule: some View {
@@ -1342,6 +1427,25 @@ struct SettingsView: View {
                 model.save()
             }
         )
+    }
+}
+
+private struct GlassSliderChrome: ViewModifier {
+    let isActive: Bool
+
+    func body(content: Content) -> some View {
+        if #available(macOS 26.0, *) {
+            if isActive {
+                content.glassEffect(.clear.interactive(), in: Capsule())
+            } else {
+                content.glassEffect(.identity, in: Capsule())
+            }
+        } else {
+            content.background {
+                Capsule()
+                    .fill(isActive ? AnyShapeStyle(.ultraThinMaterial) : AnyShapeStyle(.clear))
+            }
+        }
     }
 }
 
