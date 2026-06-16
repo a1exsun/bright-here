@@ -10,10 +10,9 @@ if [[ -z "$CERTIFICATE_BASE64" || -z "$CERTIFICATE_PASSWORD" ]]; then
   exit 0
 fi
 
-KEYCHAIN_PASSWORD="${KEYCHAIN_PASSWORD:-$(openssl rand -hex 24)}"
 KEYCHAIN_PATH="${RUNNER_TEMP:-/tmp}/bright-here-signing.keychain-db"
 P12_PATH="${RUNNER_TEMP:-/tmp}/bright-here-signing.p12"
-CERT_PATH="${RUNNER_TEMP:-/tmp}/bright-here-signing.crt"
+KEYCHAIN_PASSWORD="${KEYCHAIN_PASSWORD:-$(openssl rand -hex 24)}"
 
 printf '%s' "$CERTIFICATE_BASE64" | base64 --decode > "$P12_PATH"
 
@@ -31,13 +30,9 @@ security import "$P12_PATH" \
 echo "Imported signing certificate into temporary keychain."
 
 security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | sed 's/[ "]//g')
-security find-certificate -c "$IDENTITY_NAME" -p "$KEYCHAIN_PATH" > "$CERT_PATH"
-security add-trusted-cert -r trustRoot -p codeSign -k "$KEYCHAIN_PATH" "$CERT_PATH" >/dev/null
-echo "Trusted signing certificate for code signing on this runner."
 
-if ! security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep -F "\"$IDENTITY_NAME\"" >/dev/null; then
-  echo "Imported certificate, but identity was not found: $IDENTITY_NAME" >&2
-  security find-identity -v -p codesigning "$KEYCHAIN_PATH" >&2
+if ! security find-certificate -c "$IDENTITY_NAME" "$KEYCHAIN_PATH" >/dev/null 2>&1; then
+  echo "Imported certificate, but it was not found by common name: $IDENTITY_NAME" >&2
   exit 1
 fi
 
