@@ -13,7 +13,6 @@ fi
 KEYCHAIN_PASSWORD="${KEYCHAIN_PASSWORD:-$(openssl rand -hex 24)}"
 KEYCHAIN_PATH="${RUNNER_TEMP:-/tmp}/bright-here-signing.keychain-db"
 P12_PATH="${RUNNER_TEMP:-/tmp}/bright-here-signing.p12"
-CERT_PATH="${RUNNER_TEMP:-/tmp}/bright-here-signing.crt"
 
 printf '%s' "$CERTIFICATE_BASE64" | base64 --decode > "$P12_PATH"
 
@@ -24,14 +23,12 @@ security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 security import "$P12_PATH" \
   -k "$KEYCHAIN_PATH" \
   -P "$CERTIFICATE_PASSWORD" \
+  -A \
   -T /usr/bin/codesign \
   -T /usr/bin/security \
   >/dev/null
 
 security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | sed 's/[ "]//g')
-security find-certificate -c "$IDENTITY_NAME" -p "$KEYCHAIN_PATH" > "$CERT_PATH"
-security add-trusted-cert -r trustRoot -p codeSign -k "$KEYCHAIN_PATH" "$CERT_PATH" >/dev/null
-security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" >/dev/null
 
 if ! security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep -F "\"$IDENTITY_NAME\"" >/dev/null; then
   echo "Imported certificate, but identity was not found: $IDENTITY_NAME" >&2
