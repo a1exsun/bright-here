@@ -26,5 +26,4 @@ jobs:
         with:
           name: BrightHere
           path: |
-            release/BrightHere-*.zip
             release/BrightHere-*.dmg

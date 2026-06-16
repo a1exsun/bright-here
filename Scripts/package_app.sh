@@ -5,7 +5,6 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT_DIR/Scripts/signing_identity.sh"
 CONFIGURATION="${CONFIGURATION:-release}"
 VERSION="$(tr -d '[:space:]' < "$ROOT_DIR/VERSION")"
-BUILD_NUMBER="$(tr -d '[:space:]' < "$ROOT_DIR/BUILD")"
 SCRATCH_DIR="$ROOT_DIR/.build/apple"
 APP_DIR="$ROOT_DIR/release/Bright Here.app"
 CONTENTS_DIR="$APP_DIR/Contents"
@@ -46,7 +45,7 @@ cp "$ROOT_DIR/Resources/Info.plist" "$CONTENTS_DIR/Info.plist"
 cp "$ROOT_DIR/Resources/AppIcon.icns" "$RESOURCES_DIR/AppIcon.icns"
 cp "$ROOT_DIR/Resources/AppIconDark.png" "$RESOURCES_DIR/AppIconDark.png"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$CONTENTS_DIR/Info.plist"
-/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$CONTENTS_DIR/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$CONTENTS_DIR/Info.plist"
 
 if compgen -G "$BUILD_DIR/*.framework" > /dev/null; then
   cp -R "$BUILD_DIR"/*.framework "$FRAMEWORKS_DIR/"
@@ -68,5 +67,4 @@ else
   codesign --force --deep --options runtime --sign "$SIGN_IDENTITY" "$APP_DIR"
 fi
 
-ditto -c -k --norsrc --keepParent "$APP_DIR" "$ROOT_DIR/release/BrightHere-$VERSION.zip"
-echo "$ROOT_DIR/release/BrightHere-$VERSION.zip"
+echo "$APP_DIR"

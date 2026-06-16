@@ -4,21 +4,24 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VERSION="$(tr -d '[:space:]' < "$ROOT_DIR/VERSION")"
 TAG="v$VERSION"
-ZIP_PATH="$ROOT_DIR/release/BrightHere-$VERSION.zip"
 DMG_PATH="$ROOT_DIR/release/BrightHere-$VERSION.dmg"
 
-ASSETS=("$ZIP_PATH")
-if [[ -f "$DMG_PATH" ]]; then
-  ASSETS+=("$DMG_PATH")
+if [[ ! -f "$DMG_PATH" ]]; then
+  echo "Missing release asset: $DMG_PATH" >&2
+  exit 1
 fi
+
+ASSETS=("$DMG_PATH")
 if [[ -f "$ROOT_DIR/release/appcast" ]]; then
   ASSETS+=("$ROOT_DIR/release/appcast")
 fi
 
 RELEASE_NOTES="## What's Changed
 
+- Add an automatic updates setting, enabled by default, with daily Sparkle update checks.
 - Keep the brightness HUD title text and filled slider track permanently white in both light and dark appearances.
-- Use ad-hoc signing for public release artifacts until Developer ID signing is available.
+- Hide the brightness HUD immediately with a short fade when the user clicks outside it.
+- Use DMG-only release artifacts and a single SemVer app version.
 
 ## Install
 
@@ -26,12 +29,9 @@ Download \`BrightHere-$VERSION.dmg\`, open it, then drag \`Bright Here.app\` to 
 
 This release is ad-hoc signed and not notarized with Apple Developer ID. macOS may still show an unidentified developer warning on first install.
 
-The zip asset is kept for Sparkle updates and advanced/manual installs.
-
 ## Assets
 
 - \`BrightHere-$VERSION.dmg\`
-- \`BrightHere-$VERSION.zip\`
 - \`appcast\`"
 
 if git ls-remote --exit-code --tags origin "$TAG" >/dev/null 2>&1; then

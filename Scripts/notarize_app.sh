@@ -6,7 +6,7 @@ if [[ -z "${APPLE_ID:-}" || -z "${APPLE_TEAM_ID:-}" || -z "${APPLE_APP_PASSWORD:
   exit 0
 fi
 
-SUBMISSION_PATH="${1:?Usage: Scripts/notarize_app.sh path/to/BrightHere.zip-or-dmg}"
+SUBMISSION_PATH="${1:?Usage: Scripts/notarize_app.sh path/to/BrightHere.dmg}"
 APP_DIR="$(dirname "$SUBMISSION_PATH")/Bright Here.app"
 
 if [[ -d "$APP_DIR" ]]; then

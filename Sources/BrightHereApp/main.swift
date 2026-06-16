@@ -144,6 +144,7 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
 
     func settingsDidChange(_ settings: AppSettings) {
         configureStatusItem(show: settings.showMenuBarIcon)
+        updater.applySettings(settings)
         model?.refreshPermissionStatus()
     }
 
@@ -238,7 +239,7 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         didLogMissingAccessibilityPermission = false
 
         eventTap = EventTapController { [weak self] event in
-            self?.handleSystemDefinedEvent(event) ?? false
+            self?.handleEventTapEvent(event) ?? false
         }
         if eventTap?.start() == true {
             eventTapStarted = true
@@ -250,6 +251,16 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
             model?.setHotkeyListenerActive(false)
             model?.runtimeStatus = "Could not start brightness key listener"
             log.error("Event tap failed to start")
+        }
+    }
+
+    private func handleEventTapEvent(_ event: CGEvent) -> Bool {
+        switch event.type {
+        case .leftMouseDown, .rightMouseDown, .otherMouseDown:
+            brightnessOverlay.hideIfClickIsOutsideOverlay(at: NSEvent.mouseLocation)
+            return false
+        default:
+            return handleSystemDefinedEvent(event)
         }
     }
 
@@ -411,8 +422,15 @@ final class EventTapController {
     }
 
     func start() -> Bool {
-        let systemDefinedEventType = UInt32(NSEvent.EventType.systemDefined.rawValue)
-        let mask = CGEventMask(1 << systemDefinedEventType)
+        let eventTypes = [
+            UInt32(NSEvent.EventType.systemDefined.rawValue),
+            CGEventType.leftMouseDown.rawValue,
+            CGEventType.rightMouseDown.rawValue,
+            CGEventType.otherMouseDown.rawValue
+        ]
+        let mask = eventTypes.reduce(CGEventMask(0)) { partial, type in
+            partial | CGEventMask(1 << type)
+        }
         let refcon = Unmanaged.passUnretained(self).toOpaque()
 
         guard let tap = CGEvent.tapCreate(
@@ -525,6 +543,7 @@ final class BrightnessOverlayPresenter {
     private var panel: BrightnessOverlayPanel?
     private var contentView: BrightnessOverlayContentView?
     private var hideTimer: Timer?
+    private var visibilityGeneration = 0
     private var isEditing = false
     private var isHovering = false
 
@@ -537,6 +556,7 @@ final class BrightnessOverlayPresenter {
         on display: ManagedDisplay,
         onValueChange: @escaping (Float) -> Void
     ) {
+        visibilityGeneration += 1
         let panel = self.panel ?? makePanel()
         self.panel = panel
 
@@ -594,32 +614,46 @@ final class BrightnessOverlayPresenter {
         hideTimer?.invalidate()
         hideTimer = Timer.scheduledTimer(withTimeInterval: 2.2, repeats: false) { [weak self] _ in
             Task { @MainActor in
-                self?.hide()
+                self?.hideWithFade()
             }
         }
     }
 
-    private func hide() {
+    private func hideWithFade() {
         guard let panel, panel.isVisible else {
             return
         }
 
+        visibilityGeneration += 1
+        let generation = visibilityGeneration
+        prepareForHide()
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.16
+            context.duration = 0.20
             panel.animator().alphaValue = 0
         } completionHandler: {
             Task { @MainActor in
+                guard self.visibilityGeneration == generation else {
+                    return
+                }
                 panel.orderOut(nil)
             }
         }
     }
 
-    private func hideImmediately() {
+    private func prepareForHide() {
         hideTimer?.invalidate()
+        hideTimer = nil
         isEditing = false
         isHovering = false
         contentView?.resetHoverState()
-        panel?.orderOut(nil)
+    }
+
+    func hideIfClickIsOutsideOverlay(at location: NSPoint) {
+        guard let panel, panel.isVisible, !panel.frame.contains(location) else {
+            return
+        }
+
+        hideWithFade()
     }
 
     private func position(_ panel: NSPanel, on screen: NSScreen?) {
@@ -691,6 +725,9 @@ final class BrightnessOverlayContentView: NSView {
         let glass = glassClass.init(frame: .zero)
         glass.setValue(contentView, forKey: "contentView")
         glass.setValue(cornerRadius, forKey: "cornerRadius")
+        if glass.responds(to: NSSelectorFromString("setTintColor:")) {
+            glass.setValue(NSColor.systemGray.withAlphaComponent(0.32), forKey: "tintColor")
+        }
         return glass
     }
 
@@ -834,6 +871,7 @@ final class BrightnessOverlayContentView: NSView {
     private func applyFixedHUDColors() {
         titleLabel.textColor = .white
         slider.trackFillColor = .white
+        slider.fixedFillColor = .white
     }
 
     private func iconView(symbolName: String, pointSize: CGFloat) -> NSImageView {
@@ -868,6 +906,12 @@ final class BrightnessOverlayContentView: NSView {
 @MainActor
 final class BrightnessOverlaySlider: NSSlider {
     var onEditingChanged: ((Bool) -> Void)?
+    var fixedFillColor = NSColor.white {
+        didSet {
+            (cell as? BrightnessOverlaySliderCell)?.fixedFillColor = fixedFillColor
+            needsDisplay = true
+        }
+    }
     var showsKnob = true {
         didSet {
             guard oldValue != showsKnob else {
@@ -902,12 +946,49 @@ final class BrightnessOverlaySlider: NSSlider {
         sliderCell.isContinuous = isContinuous
         sliderCell.controlSize = controlSize
         sliderCell.showsKnob = showsKnob
+        sliderCell.fixedFillColor = fixedFillColor
         cell = sliderCell
     }
 }
 
 final class BrightnessOverlaySliderCell: NSSliderCell {
     var showsKnob = true
+    var fixedFillColor = NSColor.white
+
+    override func drawBar(inside rect: NSRect, flipped: Bool) {
+        super.drawBar(inside: rect, flipped: flipped)
+
+        let range = maxValue - minValue
+        guard range > 0 else {
+            return
+        }
+
+        let progress = min(max((doubleValue - minValue) / range, 0), 1)
+        guard progress > 0 else {
+            return
+        }
+
+        let trackHeight: CGFloat = 4
+        let trackRect = NSRect(
+            x: rect.minX,
+            y: rect.midY - trackHeight / 2,
+            width: rect.width,
+            height: trackHeight
+        )
+        let fillRect = NSRect(
+            x: trackRect.minX,
+            y: trackRect.minY,
+            width: trackRect.width * CGFloat(progress),
+            height: trackRect.height
+        )
+
+        fixedFillColor.setFill()
+        NSBezierPath(
+            roundedRect: fillRect,
+            xRadius: trackHeight / 2,
+            yRadius: trackHeight / 2
+        ).fill()
+    }
 
     override func drawKnob(_ knobRect: NSRect) {
         guard showsKnob else {
@@ -955,6 +1036,8 @@ final class BrightnessOverlayPanel: NSPanel {
 
 @MainActor
 final class SparkleUpdateController: NSObject, SPUUpdaterDelegate {
+    private static let dailyUpdateCheckInterval: TimeInterval = 24 * 60 * 60
+
     private let log: AppLog
     private let statusHandler: (String) -> Void
     private lazy var updaterController = SPUStandardUpdaterController(
@@ -972,6 +1055,30 @@ final class SparkleUpdateController: NSObject, SPUUpdaterDelegate {
     func start() {
         updaterController.startUpdater()
         log.info("Sparkle updater started")
+    }
+
+    func applySettings(_ settings: AppSettings) {
+        let updater = updaterController.updater
+        let intervalChanged = abs(updater.updateCheckInterval - Self.dailyUpdateCheckInterval) > 0.5
+        let checksChanged = updater.automaticallyChecksForUpdates != settings.autoUpdateEnabled
+        let downloadsChanged = updater.automaticallyDownloadsUpdates != settings.autoUpdateEnabled
+
+        guard intervalChanged || checksChanged || downloadsChanged else {
+            log.info("Automatic updates already configured enabled=\(settings.autoUpdateEnabled) interval=\(Self.dailyUpdateCheckInterval)")
+            return
+        }
+
+        if intervalChanged {
+            updater.updateCheckInterval = Self.dailyUpdateCheckInterval
+        }
+        if checksChanged {
+            updater.automaticallyChecksForUpdates = settings.autoUpdateEnabled
+        }
+        if downloadsChanged {
+            updater.automaticallyDownloadsUpdates = settings.autoUpdateEnabled
+        }
+
+        log.info("Automatic updates enabled=\(settings.autoUpdateEnabled) interval=\(Self.dailyUpdateCheckInterval)")
     }
 
     func checkForUpdates() {
@@ -1109,10 +1216,6 @@ struct SettingsView: View {
 
     private var appVersionText: String {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
-        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
-        if let build, !build.isEmpty {
-            return "v\(version) (\(build))"
-        }
         return "v\(version)"
     }
 
@@ -1170,6 +1273,7 @@ struct SettingsView: View {
     private var controls: some View {
         VStack(alignment: .leading, spacing: 14) {
             Toggle("Show brightness overlay", isOn: binding(\.showBrightnessOverlay))
+            Toggle("Automatic updates", isOn: binding(\.autoUpdateEnabled))
             Toggle("Launch at login", isOn: Binding(
                 get: { model.settings.launchAtLogin },
                 set: { model.setLaunchAtLogin($0) }

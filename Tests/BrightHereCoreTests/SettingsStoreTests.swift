@@ -24,6 +24,7 @@ struct SettingsStoreTests {
             launchAtLogin: true,
             showMenuBarIcon: true,
             showBrightnessOverlay: false,
+            autoUpdateEnabled: false,
             brightnessStep: 0.1
         )
 
@@ -40,6 +41,16 @@ struct SettingsStoreTests {
         let settings = UserDefaultsSettingsStore(defaults: defaults).load()
 
         #expect(settings.showBrightnessOverlay)
+    }
+
+    @Test("defaults automatic updates to enabled for existing users")
+    func defaultsAutomaticUpdatesToEnabled() {
+        let defaults = UserDefaults(suiteName: "BrightHereTests.autoUpdateDefault")!
+        defaults.removePersistentDomain(forName: "BrightHereTests.autoUpdateDefault")
+
+        let settings = UserDefaultsSettingsStore(defaults: defaults).load()
+
+        #expect(settings.autoUpdateEnabled)
     }
 
     @Test("migrates legacy default brightness step")

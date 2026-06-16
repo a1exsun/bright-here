@@ -21,12 +21,14 @@ jobs:
         run: swift test
       - name: Package app
         run: bash Scripts/package_app.sh
-      - name: Notarize if credentials are present
+      - name: Create DMG
+        run: bash Scripts/create_dmg.sh
+      - name: Notarize DMG if credentials are present
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
-        run: bash Scripts/notarize_app.sh release/BrightHere-$(cat VERSION).zip
+        run: bash Scripts/notarize_app.sh release/BrightHere-$(cat VERSION).dmg
       - name: Generate Sparkle appcast if key is configured
         env:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
@@ -37,14 +39,6 @@ jobs:
           else
             echo "Skipping Sparkle appcast: SPARKLE_PRIVATE_KEY is not configured."
           fi
-      - name: Create DMG
-        run: bash Scripts/create_dmg.sh
-      - name: Notarize DMG if credentials are present
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
-        run: bash Scripts/notarize_app.sh release/BrightHere-$(cat VERSION).dmg
       - name: Create GitHub Release for new VERSION
         env:
           GH_TOKEN: ${{ github.token }}

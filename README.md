@@ -31,6 +31,7 @@ The brightness change applies to the display under your cursor. You can reopen B
 Bright Here includes a small settings window for:
 
 - showing or hiding the brightness overlay
+- enabling or disabling automatic updates
 - launching at login
 - showing or hiding the menu bar icon
 - changing the brightness step size

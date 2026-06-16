@@ -19,20 +19,26 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.1.4</string>
+    <string>0.1.8</string>
     <key>CFBundleVersion</key>
-    <string>5</string>
+    <string>0.1.8</string>
     <key>LSMinimumSystemVersion</key>
     <string>15.0</string>
     <key>LSUIElement</key>
     <true/>
     <key>NSHumanReadableCopyright</key>
     <string>Copyright © 2026 Alex Sun</string>
+    <key>SUAutomaticallyUpdate</key>
+    <true/>
+    <key>SUEnableAutomaticChecks</key>
+    <true/>
     <key>SUEnableInstallerLauncherService</key>
     <true/>
     <key>SUFeedURL</key>
     <string>https://github.com/a1exsun/bright-here/releases/latest/download/appcast</string>
     <key>SUPublicEDKey</key>
     <string>5ZzQa3q2qZt2xlNcs3aF3bcirOwhN8cSVBJ22uh1lA0=</string>
+    <key>SUScheduledCheckInterval</key>
+    <integer>86400</integer>
 </dict>
 </plist>
