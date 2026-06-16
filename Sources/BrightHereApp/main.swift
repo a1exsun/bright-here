@@ -287,8 +287,6 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
             return nil
         }
 
-        let percent = Int((result.adjustment.newValue * 100).rounded())
-        model.runtimeStatus = "\(result.display.friendlyName): \(percent)%"
         log.info(
             "\(source) routed direction=\(direction) pointer=\(DiagnosticsFormatter.point(result.pointerLocation)) displayID=\(result.display.id) bounds=\(DiagnosticsFormatter.rect(result.display.bounds)) old=\(result.adjustment.oldValue) new=\(result.adjustment.newValue)"
         )
@@ -308,9 +306,6 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
                         self.log.error("overlay slider failed displayID=\(display.id) value=\(value)")
                         return
                     }
-
-                    let state = BrightnessIndicatorState(value: value)
-                    self.model.runtimeStatus = "\(display.friendlyName): \(state.percent)%"
                 }
             )
         }
@@ -850,19 +845,16 @@ struct SettingsView: View {
 
             Divider()
             HStack {
-                Text(model.runtimeStatus)
+                Text(appVersionText)
                     .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.tertiary)
+                    .monospacedDigit()
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Spacer()
                 Button("Quit Bright Here") {
                     model.quit()
                 }
-                Text(appVersionText)
-                    .font(.footnote)
-                    .foregroundStyle(.tertiary)
-                    .monospacedDigit()
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 10)
@@ -989,7 +981,7 @@ struct SettingsView: View {
                         model.settings.brightnessStep = Float($0)
                         model.save()
                     }
-                ), in: 0.005...0.08, step: 0.001)
+                ), in: 0.005...0.08)
                 Text(String(format: "%.1f%%", model.settings.brightnessStep * 100))
                     .frame(width: 50, alignment: .trailing)
                     .monospacedDigit()

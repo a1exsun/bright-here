@@ -87,7 +87,42 @@ release/BrightHere-<version>.zip
 release/BrightHere-<version>.dmg
 ```
 
-The zip is used for Sparkle updates. The DMG is the recommended user-facing installer: open it and drag `Bright Here.app` to Applications. The scripts ad-hoc sign locally by default. CI can use `SIGN_IDENTITY` and Apple notarization secrets when configured.
+The zip is used for Sparkle updates. The DMG is the recommended user-facing installer: open it and drag `Bright Here.app` to Applications. The scripts automatically use the stable self-signed identity when it exists in Keychain, or fall back to ad-hoc signing. CI can use `SIGN_IDENTITY`, `SIGNING_CERTIFICATE_P12_BASE64`, and Apple notarization secrets when configured.
+
+## Stable Self-Signed Signing
+
+For early distribution without a Developer ID certificate, create one stable local code signing identity and reuse it for every build:
+
+```sh
+bash Scripts/create_self_signed_identity.sh
+bash Scripts/package_app.sh
+bash Scripts/create_dmg.sh
+```
+
+The default identity name is:
+
+```text
+Bright Here Self-Signed Code Signing
+```
+
+`package_app.sh` and `create_dmg.sh` automatically use that identity when it exists in Keychain. If it is missing, they fall back to ad-hoc signing.
+
+The script also writes a reusable `.p12` and password under `.build/signing/`. Keep both files private.
+
+To use the same self-signed identity in GitHub Actions releases:
+
+```sh
+bash Scripts/create_self_signed_identity.sh
+base64 -i .build/signing/bright-here-signing.p12 | pbcopy
+```
+
+Then add these GitHub Secrets:
+
+- `SIGNING_CERTIFICATE_P12_BASE64`: the copied base64 text
+- `SIGNING_CERTIFICATE_PASSWORD`: the contents of `.build/signing/bright-here-signing.password`
+- `SIGN_IDENTITY`: `Bright Here Self-Signed Code Signing`
+
+Keep the `.p12` and password private. Recreating the certificate changes the app's signing identity and may require users to grant Accessibility permission again.
 
 ## GitHub Release Automation
 

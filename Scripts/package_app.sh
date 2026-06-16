@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT_DIR/Scripts/signing_identity.sh"
 CONFIGURATION="${CONFIGURATION:-release}"
 VERSION="$(tr -d '[:space:]' < "$ROOT_DIR/VERSION")"
 BUILD_NUMBER="$(tr -d '[:space:]' < "$ROOT_DIR/BUILD")"
@@ -37,7 +38,8 @@ fi
 
 install_name_tool -add_rpath "@executable_path/../Frameworks" "$MACOS_DIR/bright-here" 2>/dev/null || true
 
-SIGN_IDENTITY="${SIGN_IDENTITY:--}"
+SIGN_IDENTITY="$(resolve_sign_identity)"
+print_sign_identity_summary "$SIGN_IDENTITY"
 if [[ "$SIGN_IDENTITY" == "-" ]]; then
   find "$FRAMEWORKS_DIR" -maxdepth 1 -name "*.framework" -print0 | while IFS= read -r -d '' framework; do
     codesign --force --deep --sign "$SIGN_IDENTITY" "$framework"

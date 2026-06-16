@@ -17,14 +17,19 @@ fi
 
 RELEASE_NOTES="## What's Changed
 
-- Show the app version in the settings window.
-- Improve the issue template so guidance text is clearly formatted as quoted prompts.
-- Move environment details into the clipboard payload for issue reports.
-- Wrap copied environment and ERROR log details in a fenced text block for easier pasting.
+- Add a native macOS brightness overlay when F1/F2 changes brightness.
+- Replace the overlay progress bar with a draggable native slider and add a setting to show or hide it.
+- Improve recovery when the menu bar icon is hidden: launching Bright Here again reopens settings.
+- Add a Quit action in settings for users who hide the menu bar icon.
+- Hide the debug panel entry from production builds.
+- Simplify settings: continuous Step slider and version in the lower-left footer.
+- Add stable self-signed signing support for early releases without Developer ID.
 
 ## Install
 
 Download \`BrightHere-$VERSION.dmg\`, open it, then drag \`Bright Here.app\` to Applications.
+
+This release is self-signed, not notarized with Apple Developer ID. macOS may still show an unidentified developer warning on first install. After users grant Accessibility once to this stable signing identity, future updates should avoid the repeated-permission problem caused by ad-hoc signing.
 
 The zip asset is kept for Sparkle updates and advanced/manual installs.
 
