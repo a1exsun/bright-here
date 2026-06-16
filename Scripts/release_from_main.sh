@@ -18,8 +18,8 @@ fi
 
 RELEASE_NOTES="## What's Changed
 
-- Add Liquid Glass treatment to the settings Step slider on hover and drag.
-- Add Liquid Glass treatment to the HUD brightness slider while it is hovered or dragged.
+- Keep the HUD brightness icons permanently white in both light and dark appearances.
+- Adjust the HUD glass tint to pure black at 18% opacity.
 
 ## Install
 
