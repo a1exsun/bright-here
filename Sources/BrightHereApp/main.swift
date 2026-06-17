@@ -1446,7 +1446,7 @@ struct SettingsView: View {
                         model.settings.brightnessStep = Float($0)
                         model.save()
                     }
-                ), in: 0.005...0.08)
+                ), in: 0.005...0.10)
                 Text(String(format: "%.1f%%", model.settings.brightnessStep * 100))
                     .frame(width: 50, alignment: .trailing)
                     .monospacedDigit()
@@ -1499,7 +1499,7 @@ struct SettingsView: View {
                 Spacer()
                 Text(state.isSystemAvailable ? "System available" : "System unavailable")
                     .font(.caption2)
-                    .foregroundStyle(state.isSystemAvailable ? Color.secondary : Color.orange)
+                    .foregroundStyle(.secondary)
             }
 
             BrightnessModeSegmentedControl(
@@ -1719,8 +1719,12 @@ struct DebugView: View {
                         }
                     }
                     row("id", "\(snapshot.display.id)")
+                    row("cg identity", displayIdentityText(for: snapshot.display.id))
                     row("control mode", controlModeText(for: snapshot.display))
                     row("bounds", DiagnosticsFormatter.rect(snapshot.display.bounds))
+                    row("display mode", displayModeText(for: snapshot.display.id))
+                    row("color space", colorSpaceText(for: snapshot.display.id))
+                    row("edr", edrText(for: snapshot.display.id))
                     row("brightness", DiagnosticsFormatter.brightness(snapshot.brightness))
                     row("contains CG pointer", snapshot.containsPointer ? "yes" : "no")
                     row("roles", snapshot.display.roleDescription.isEmpty ? "n/a" : snapshot.display.roleDescription)
@@ -1746,6 +1750,46 @@ struct DebugView: View {
         return model.displayBrightnessModes.first(where: { $0.displayID == display.id })?.selectedMode.settingsTitle ?? "n/a"
     }
 
+    private func displayIdentityText(for displayID: DisplayID) -> String {
+        "vendor \(CGDisplayVendorNumber(displayID)), product \(CGDisplayModelNumber(displayID)), serial \(CGDisplaySerialNumber(displayID))"
+    }
+
+    private func displayModeText(for displayID: DisplayID) -> String {
+        guard let mode = CGDisplayCopyDisplayMode(displayID) else {
+            return "n/a"
+        }
+
+        let refresh = mode.refreshRate > 0 ? String(format: "@ %.2fHz", mode.refreshRate) : "@ n/a"
+        return "\(mode.width)x\(mode.height) \(refresh), pixels \(mode.pixelWidth)x\(mode.pixelHeight)"
+    }
+
+    private func colorSpaceText(for displayID: DisplayID) -> String {
+        let colorSpace = CGDisplayCopyColorSpace(displayID)
+        return colorSpace.name as String? ?? "unnamed"
+    }
+
+    private func edrText(for displayID: DisplayID) -> String {
+        guard let screen = screen(for: displayID) else {
+            return "n/a"
+        }
+
+        return String(
+            format: "current %.2f, potential %.2f, reference %.2f",
+            screen.maximumExtendedDynamicRangeColorComponentValue,
+            screen.maximumPotentialExtendedDynamicRangeColorComponentValue,
+            screen.maximumReferenceExtendedDynamicRangeColorComponentValue
+        )
+    }
+
+    private func screen(for displayID: DisplayID) -> NSScreen? {
+        NSScreen.screens.first { screen in
+            guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
+                return false
+            }
+            return number.uint32Value == displayID
+        }
+    }
+
     @ViewBuilder
     private func ddcSection(for displayID: DisplayID) -> some View {
         if let diagnostics = viewModel.ddcDiagnostics[displayID] {
@@ -1758,7 +1802,10 @@ struct DebugView: View {
             row("ddc raw current", rawPair(current: diagnostics.rawCurrent, maximum: diagnostics.rawMaximum))
             row("ddc mapped ceiling", mappedCeilingText(diagnostics))
             row("ddc mapped value", DiagnosticsFormatter.brightness(diagnostics.mappedBrightness))
+            row("ddc transports", transportReadbacksText(diagnostics.transportReadbacks))
+            row("ddc vcp probes", vcpFeatureReadbacksText(diagnostics.vcpFeatureReadbacks))
             row("ddc last write", lastWriteText(diagnostics.lastWrite))
+            row("ddc write readback", lastWriteReadbackText(diagnostics.lastWrite))
             row("ddc last error", diagnostics.lastError ?? "n/a")
         }
     }
@@ -1787,6 +1834,64 @@ struct DebugView: View {
         let status = write.succeeded ? "ok" : "failed"
         let backend = write.backend?.rawValue ?? "n/a"
         return "\(String(format: "%.1f%%", write.requestedBrightness * 100)) -> raw \(write.rawValue) / \(write.rawMaximum) of \(write.reportedMaximum), \(backend), \(status)"
+    }
+
+    private func lastWriteReadbackText(_ write: DDCBrightnessLastWrite?) -> String {
+        guard let write,
+              let current = write.readbackRawCurrent,
+              let maximum = write.readbackRawMaximum else {
+            return "n/a"
+        }
+
+        return "\(write.readbackBackend?.rawValue ?? "n/a"): \(current) / \(maximum)"
+    }
+
+    private func transportReadbacksText(_ readbacks: [DDCTransportReadback]) -> String {
+        guard !readbacks.isEmpty else {
+            return "n/a"
+        }
+
+        return readbacks
+            .map { readback in
+                guard let current = readback.rawCurrent,
+                      let maximum = readback.rawMaximum else {
+                    return "\(readback.backend.rawValue): n/a"
+                }
+                return "\(readback.backend.rawValue): \(current)/\(maximum)"
+            }
+            .joined(separator: "; ")
+    }
+
+    private func vcpFeatureReadbacksText(_ readbacks: [DDCVCPFeatureReadback]) -> String {
+        guard !readbacks.isEmpty else {
+            return "n/a"
+        }
+
+        return readbacks
+            .map { readback in
+                let label = vcpFeatureLabel(readback.code)
+                guard let current = readback.rawCurrent,
+                      let maximum = readback.rawMaximum else {
+                    return "\(label): n/a"
+                }
+                return "\(label): \(current)/\(maximum) via \(readback.backend?.rawValue ?? "n/a")"
+            }
+            .joined(separator: "; ")
+    }
+
+    private func vcpFeatureLabel(_ code: UInt8) -> String {
+        switch code {
+        case 0x10:
+            return "0x10 luminance"
+        case 0x12:
+            return "0x12 contrast"
+        case 0x13:
+            return "0x13 backlight"
+        case 0xD6:
+            return "0xD6 power"
+        default:
+            return String(format: "0x%02X", code)
+        }
     }
 
     private func row(_ title: String, _ value: String) -> some View {
