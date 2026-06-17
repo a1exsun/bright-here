@@ -3,49 +3,34 @@ import Testing
 
 @Suite("DDC luminance mapping")
 struct DDCLuminanceMappingTests {
-    @Test("uses full reported range by default")
-    func usesFullReportedRangeByDefault() {
-        let mapping = DDCBrightnessController.LuminanceMapping(
-            reportedMaximum: 100,
-            range: .full
-        )
+    @Test("maps full logical brightness into the first 38 percent of raw DDC luminance")
+    func mapsLogicalBrightnessIntoFirstThirtyEightPercent() {
+        let mapping = DDCBrightnessController.LuminanceMapping(reportedMaximum: 100)
 
         #expect(mapping.rawValue(for: 0) == 0)
-        #expect(mapping.rawValue(for: 0.5) == 50)
-        #expect(mapping.rawValue(for: 1) == 100)
-        #expect(mapping.normalized(current: 50) == 0.5)
+        #expect(mapping.rawValue(for: 0.5) == 19)
+        #expect(mapping.rawValue(for: 1) == 38)
+        #expect(mapping.rawMaximum == 38)
+        #expect(mapping.rawMaximumPercent == 0.38)
+    }
+
+    @Test("clamps raw readback above the mapped DDC ceiling")
+    func clampsRawReadbackAboveMappedCeiling() {
+        let mapping = DDCBrightnessController.LuminanceMapping(reportedMaximum: 100)
+
+        #expect(mapping.normalized(current: 0) == 0)
+        #expect(mapping.normalized(current: 19) == 0.5)
+        #expect(mapping.normalized(current: 38) == 1)
+        #expect(mapping.normalized(current: 39) == 1)
         #expect(mapping.normalized(current: 100) == 1)
     }
 
-    @Test("maps first half range to one logical range")
-    func mapsFirstHalfRangeToOneLogicalRange() {
-        let mapping = DDCBrightnessController.LuminanceMapping(
-            reportedMaximum: 100,
-            range: .firstHalf
-        )
+    @Test("does not exceed 38 percent for non-100 reported maximums")
+    func doesNotExceedThirtyEightPercentForOtherMaximums() {
+        let mapping = DDCBrightnessController.LuminanceMapping(reportedMaximum: 255)
 
-        #expect(mapping.rawValue(for: 0) == 0)
-        #expect(mapping.rawValue(for: 0.5) == 25)
-        #expect(mapping.rawValue(for: 1) == 50)
-        #expect(mapping.normalized(current: 0) == 0)
-        #expect(mapping.normalized(current: 50) == 1)
-        #expect(mapping.normalized(current: 51) == 0)
-        #expect(mapping.normalized(current: 100) == 1)
-    }
-
-    @Test("maps second half range to one logical range")
-    func mapsSecondHalfRangeToOneLogicalRange() {
-        let mapping = DDCBrightnessController.LuminanceMapping(
-            reportedMaximum: 100,
-            range: .secondHalf
-        )
-
-        #expect(mapping.rawValue(for: 0) == 51)
-        #expect(mapping.rawValue(for: 0.5) == 76)
-        #expect(mapping.rawValue(for: 1) == 100)
-        #expect(mapping.normalized(current: 0) == 0)
-        #expect(mapping.normalized(current: 50) == 1)
-        #expect(mapping.normalized(current: 51) == 0)
-        #expect(mapping.normalized(current: 100) == 1)
+        #expect(mapping.rawMaximum == 96)
+        #expect(mapping.rawValue(for: 1) == 96)
+        #expect(mapping.rawMaximumPercent <= 0.38)
     }
 }

@@ -12,7 +12,6 @@ struct DisplayBrightnessModeState: Identifiable, Equatable {
     let displayName: String
     let isSystemAvailable: Bool
     let selectedMode: BrightnessControlMode
-    let ddcLuminanceRange: DDCLuminanceRange
 }
 
 @MainActor
@@ -41,10 +40,6 @@ final class AppModel: ObservableObject {
 
     func setBrightnessControlMode(_ mode: BrightnessControlMode, for displayIdentity: String) {
         coordinator?.setBrightnessControlMode(mode, for: displayIdentity)
-    }
-
-    func setDDCLuminanceRange(_ range: DDCLuminanceRange, for displayIdentity: String) {
-        coordinator?.setDDCLuminanceRange(range, for: displayIdentity)
     }
 
     func refreshPermissionStatus() {
@@ -208,15 +203,12 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         let states = externalDisplays().map { display in
             let systemAvailable = brightnessControllers.system.canControl(displayID: display.id)
             let selectedMode = effectiveBrightnessControlMode(for: display, systemAvailable: systemAvailable)
-            let ddcRange = model.settings.ddcLuminanceRange(for: display)
-            brightnessControllers.ddcCI.setLuminanceRange(ddcRange, for: display.id)
             return DisplayBrightnessModeState(
                 id: display.settingsIdentity,
                 displayID: display.id,
                 displayName: display.friendlyName,
                 isSystemAvailable: systemAvailable,
-                selectedMode: selectedMode,
-                ddcLuminanceRange: ddcRange
+                selectedMode: selectedMode
             )
         }
 
@@ -246,18 +238,6 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         refreshBrightnessModeAvailability()
     }
 
-    func setDDCLuminanceRange(_ range: DDCLuminanceRange, for displayIdentity: String) {
-        guard let model,
-              let display = externalDisplays().first(where: { $0.settingsIdentity == displayIdentity }) else {
-            return
-        }
-
-        model.settings.setDDCLuminanceRange(range, for: display)
-        brightnessControllers.ddcCI.setLuminanceRange(range, for: display.id)
-        model.save()
-        refreshBrightnessModeAvailability()
-    }
-
     func checkForUpdates() {
         updater.checkForUpdates()
     }
@@ -281,7 +261,8 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
             let view = DebugView(model: model, viewModel: DebugViewModel(
                 displayProvider: self.displayProvider,
                 pointerLocator: self.pointerLocator,
-                brightness: self.brightnessControllerForCurrentPointerDisplay()
+                brightness: self.brightnessControllerForCurrentPointerDisplay(),
+                ddcBrightness: self.brightnessControllers.ddcCI
             ))
             let hosting = NSHostingView(rootView: view)
             let window = NSWindow(
@@ -401,12 +382,6 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
             model.runtimeStatus = "System brightness is unavailable for \(targetDisplay.friendlyName)"
             log.error("\(source) system brightness unavailable displayID=\(targetDisplay.id) name=\(targetDisplay.friendlyName)")
             return nil
-        }
-        if mode == .ddcCI {
-            brightnessControllers.ddcCI.setLuminanceRange(
-                model.settings.ddcLuminanceRange(for: targetDisplay),
-                for: targetDisplay.id
-            )
         }
 
         let brightness = brightnessControllers.controller(for: mode)
@@ -1261,15 +1236,19 @@ final class SparkleUpdateController: NSObject, SPUUpdaterDelegate {
 @MainActor
 final class DebugViewModel: ObservableObject {
     @Published var diagnostics: PointerDiagnostics
+    @Published var ddcDiagnostics: [DisplayID: DDCBrightnessDiagnostics] = [:]
     @Published var nsEventMouseLocation: CGPoint = .zero
 
     private let collector: DiagnosticsCollector
+    private let ddcBrightness: DDCBrightnessController
 
     init(
         displayProvider: DisplayProviding,
         pointerLocator: PointerLocating,
-        brightness: BrightnessControlling
+        brightness: BrightnessControlling,
+        ddcBrightness: DDCBrightnessController
     ) {
+        self.ddcBrightness = ddcBrightness
         collector = DiagnosticsCollector(
             displayProvider: displayProvider,
             pointerLocator: pointerLocator,
@@ -1280,7 +1259,13 @@ final class DebugViewModel: ObservableObject {
     }
 
     func refresh() {
-        diagnostics = collector.snapshot()
+        let snapshot = collector.snapshot()
+        diagnostics = snapshot
+        ddcDiagnostics = Dictionary(
+            uniqueKeysWithValues: snapshot.displays
+                .filter { !$0.display.isBuiltin }
+                .map { ($0.display.id, ddcBrightness.diagnostics(for: $0.display.id)) }
+        )
         nsEventMouseLocation = NSEvent.mouseLocation
     }
 }
@@ -1506,16 +1491,6 @@ struct SettingsView: View {
                 isSystemAvailable: state.isSystemAvailable
             )
             .frame(maxWidth: .infinity)
-
-            if state.selectedMode == .ddcCI {
-                HStack(spacing: 8) {
-                    Text("DDC range")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    DDCLuminanceRangeSegmentedControl(selection: ddcRangeBinding(for: state))
-                        .frame(maxWidth: .infinity)
-                }
-            }
         }
     }
 
@@ -1526,17 +1501,6 @@ struct SettingsView: View {
             },
             set: { mode in
                 model.setBrightnessControlMode(mode, for: state.id)
-            }
-        )
-    }
-
-    private func ddcRangeBinding(for state: DisplayBrightnessModeState) -> Binding<DDCLuminanceRange> {
-        Binding(
-            get: {
-                model.displayBrightnessModes.first(where: { $0.id == state.id })?.ddcLuminanceRange ?? state.ddcLuminanceRange
-            },
-            set: { range in
-                model.setDDCLuminanceRange(range, for: state.id)
             }
         )
     }
@@ -1594,19 +1558,6 @@ private extension BrightnessControlMode {
     }
 }
 
-private extension DDCLuminanceRange {
-    var settingsTitle: String {
-        switch self {
-        case .full:
-            "Full"
-        case .firstHalf:
-            "First"
-        case .secondHalf:
-            "Second"
-        }
-    }
-}
-
 private struct BrightnessModeSegmentedControl: NSViewRepresentable {
     @Binding var selection: BrightnessControlMode
     let isSystemAvailable: Bool
@@ -1658,60 +1609,10 @@ private struct BrightnessModeSegmentedControl: NSViewRepresentable {
     }
 }
 
-private struct DDCLuminanceRangeSegmentedControl: NSViewRepresentable {
-    @Binding var selection: DDCLuminanceRange
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(self)
-    }
-
-    func makeNSView(context: Context) -> NSSegmentedControl {
-        let control = NSSegmentedControl(
-            labels: DDCLuminanceRange.allCases.map(\.settingsTitle),
-            trackingMode: .selectOne,
-            target: context.coordinator,
-            action: #selector(Coordinator.changed(_:))
-        )
-        control.segmentStyle = .automatic
-        control.segmentDistribution = .fillEqually
-        control.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        control.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        return control
-    }
-
-    func updateNSView(_ control: NSSegmentedControl, context: Context) {
-        context.coordinator.parent = self
-        control.segmentDistribution = .fillEqually
-
-        for (index, range) in DDCLuminanceRange.allCases.enumerated() {
-            control.setLabel(range.settingsTitle, forSegment: index)
-            control.setEnabled(true, forSegment: index)
-        }
-
-        control.selectedSegment = DDCLuminanceRange.allCases.firstIndex(of: selection) ?? 0
-    }
-
-    final class Coordinator: NSObject {
-        var parent: DDCLuminanceRangeSegmentedControl
-
-        init(_ parent: DDCLuminanceRangeSegmentedControl) {
-            self.parent = parent
-        }
-
-        @MainActor @objc func changed(_ sender: NSSegmentedControl) {
-            let index = sender.selectedSegment
-            guard DDCLuminanceRange.allCases.indices.contains(index) else {
-                return
-            }
-            parent.selection = DDCLuminanceRange.allCases[index]
-        }
-    }
-}
-
 struct DebugView: View {
     @ObservedObject var model: AppModel
     @StateObject var viewModel: DebugViewModel
-    private let timer = Timer.publish(every: 0.25, on: .main, in: .common).autoconnect()
+    private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1776,7 +1677,7 @@ struct DebugView: View {
                 viewModel.refresh()
             }
             Spacer()
-            Text("Uses current CG pointer and native brightness API.")
+            Text("Uses current CG pointer and selected brightness mode.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -1802,10 +1703,14 @@ struct DebugView: View {
                         }
                     }
                     row("id", "\(snapshot.display.id)")
+                    row("control mode", controlModeText(for: snapshot.display))
                     row("bounds", DiagnosticsFormatter.rect(snapshot.display.bounds))
                     row("brightness", DiagnosticsFormatter.brightness(snapshot.brightness))
                     row("contains CG pointer", snapshot.containsPointer ? "yes" : "no")
                     row("roles", snapshot.display.roleDescription.isEmpty ? "n/a" : snapshot.display.roleDescription)
+                    if !snapshot.display.isBuiltin {
+                        ddcSection(for: snapshot.display.id)
+                    }
                 }
                 .padding(12)
                 .background(.background, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -1817,11 +1722,62 @@ struct DebugView: View {
         }
     }
 
+    private func controlModeText(for display: ManagedDisplay) -> String {
+        if display.isBuiltin {
+            return "System"
+        }
+
+        return model.displayBrightnessModes.first(where: { $0.displayID == display.id })?.selectedMode.settingsTitle ?? "n/a"
+    }
+
+    @ViewBuilder
+    private func ddcSection(for displayID: DisplayID) -> some View {
+        if let diagnostics = viewModel.ddcDiagnostics[displayID] {
+            Divider()
+                .padding(.vertical, 3)
+            Text("DDC/CI")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            row("ddc read backend", diagnostics.readBackend?.rawValue ?? "n/a")
+            row("ddc raw current", rawPair(current: diagnostics.rawCurrent, maximum: diagnostics.rawMaximum))
+            row("ddc mapped ceiling", mappedCeilingText(diagnostics))
+            row("ddc mapped value", DiagnosticsFormatter.brightness(diagnostics.mappedBrightness))
+            row("ddc last write", lastWriteText(diagnostics.lastWrite))
+            row("ddc last error", diagnostics.lastError ?? "n/a")
+        }
+    }
+
+    private func rawPair(current: UInt16?, maximum: UInt16?) -> String {
+        guard let current, let maximum else {
+            return "n/a"
+        }
+        return "\(current) / \(maximum)"
+    }
+
+    private func mappedCeilingText(_ diagnostics: DDCBrightnessDiagnostics) -> String {
+        guard let rawMaximum = diagnostics.mappedRawMaximum,
+              let maximum = diagnostics.rawMaximum,
+              let percent = diagnostics.mappedRawMaximumPercent else {
+            return "n/a"
+        }
+        return "\(rawMaximum) / \(maximum) (\(String(format: "%.1f%%", percent * 100)))"
+    }
+
+    private func lastWriteText(_ write: DDCBrightnessLastWrite?) -> String {
+        guard let write else {
+            return "n/a"
+        }
+
+        let status = write.succeeded ? "ok" : "failed"
+        let backend = write.backend?.rawValue ?? "n/a"
+        return "\(String(format: "%.1f%%", write.requestedBrightness * 100)) -> raw \(write.rawValue) / \(write.rawMaximum) of \(write.reportedMaximum), \(backend), \(status)"
+    }
+
     private func row(_ title: String, _ value: String) -> some View {
         HStack(alignment: .firstTextBaseline) {
             Text(title)
                 .foregroundStyle(.secondary)
-                .frame(width: 140, alignment: .leading)
+                .frame(width: 160, alignment: .leading)
             Text(value)
                 .textSelection(.enabled)
             Spacer()

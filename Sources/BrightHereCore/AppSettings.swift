@@ -11,7 +11,6 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var brightnessStep: Float
     public var brightnessControlMode: BrightnessControlMode
     public var displayBrightnessControlModes: [String: BrightnessControlMode]
-    public var displayDDCLuminanceRanges: [String: DDCLuminanceRange]
 
     public init(
         isEnabled: Bool = true,
@@ -21,8 +20,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         autoUpdateEnabled: Bool = true,
         brightnessStep: Float = Self.defaultBrightnessStep,
         brightnessControlMode: BrightnessControlMode = .system,
-        displayBrightnessControlModes: [String: BrightnessControlMode] = [:],
-        displayDDCLuminanceRanges: [String: DDCLuminanceRange] = [:]
+        displayBrightnessControlModes: [String: BrightnessControlMode] = [:]
     ) {
         self.isEnabled = isEnabled
         self.launchAtLogin = launchAtLogin
@@ -32,7 +30,6 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.brightnessStep = brightnessStep
         self.brightnessControlMode = brightnessControlMode
         self.displayBrightnessControlModes = displayBrightnessControlModes
-        self.displayDDCLuminanceRanges = displayDDCLuminanceRanges
     }
 
     public func brightnessControlMode(for display: ManagedDisplay) -> BrightnessControlMode {
@@ -49,22 +46,6 @@ public struct AppSettings: Codable, Equatable, Sendable {
         }
 
         displayBrightnessControlModes[display.settingsIdentity] = mode
-    }
-
-    public func ddcLuminanceRange(for display: ManagedDisplay) -> DDCLuminanceRange {
-        if display.isBuiltin {
-            return .full
-        }
-
-        return displayDDCLuminanceRanges[display.settingsIdentity] ?? .full
-    }
-
-    public mutating func setDDCLuminanceRange(_ range: DDCLuminanceRange, for display: ManagedDisplay) {
-        guard !display.isBuiltin else {
-            return
-        }
-
-        displayDDCLuminanceRanges[display.settingsIdentity] = range
     }
 }
 
@@ -85,7 +66,6 @@ public final class UserDefaultsSettingsStore: SettingsStoring {
         static let brightnessStep = "brightnessStep"
         static let brightnessControlMode = "brightnessControlMode"
         static let displayBrightnessControlModes = "displayBrightnessControlModes"
-        static let displayDDCLuminanceRanges = "displayDDCLuminanceRanges"
     }
 
     private let defaults: UserDefaults
@@ -103,8 +83,7 @@ public final class UserDefaultsSettingsStore: SettingsStoring {
             autoUpdateEnabled: defaults.object(forKey: Key.autoUpdateEnabled) as? Bool ?? true,
             brightnessStep: loadedBrightnessStep(),
             brightnessControlMode: loadedBrightnessControlMode(),
-            displayBrightnessControlModes: loadedDisplayBrightnessControlModes(),
-            displayDDCLuminanceRanges: loadedDisplayDDCLuminanceRanges()
+            displayBrightnessControlModes: loadedDisplayBrightnessControlModes()
         )
     }
 
@@ -119,10 +98,6 @@ public final class UserDefaultsSettingsStore: SettingsStoring {
         defaults.set(
             settings.displayBrightnessControlModes.mapValues(\.rawValue),
             forKey: Key.displayBrightnessControlModes
-        )
-        defaults.set(
-            settings.displayDDCLuminanceRanges.mapValues(\.rawValue),
-            forKey: Key.displayDDCLuminanceRanges
         )
     }
 
@@ -154,18 +129,6 @@ public final class UserDefaultsSettingsStore: SettingsStoring {
         return rawModes.reduce(into: [:]) { result, entry in
             if let mode = BrightnessControlMode(rawValue: entry.value) {
                 result[entry.key] = mode
-            }
-        }
-    }
-
-    private func loadedDisplayDDCLuminanceRanges() -> [String: DDCLuminanceRange] {
-        guard let rawRanges = defaults.object(forKey: Key.displayDDCLuminanceRanges) as? [String: String] else {
-            return [:]
-        }
-
-        return rawRanges.reduce(into: [:]) { result, entry in
-            if let range = DDCLuminanceRange(rawValue: entry.value) {
-                result[entry.key] = range
             }
         }
     }

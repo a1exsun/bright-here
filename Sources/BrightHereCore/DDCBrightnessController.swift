@@ -5,6 +5,31 @@ import IOKit
 import IOKit.i2c
 import IOKit.graphics
 
+public enum DDCTransport: String, Equatable, Sendable {
+    case arm64AVService = "arm64-av-service"
+    case i2cFramebuffer = "i2c-framebuffer"
+}
+
+public struct DDCBrightnessLastWrite: Equatable, Sendable {
+    public let requestedBrightness: Float
+    public let rawValue: UInt16
+    public let rawMaximum: UInt16
+    public let reportedMaximum: UInt16
+    public let backend: DDCTransport?
+    public let succeeded: Bool
+}
+
+public struct DDCBrightnessDiagnostics: Equatable, Sendable {
+    public let readBackend: DDCTransport?
+    public let rawCurrent: UInt16?
+    public let rawMaximum: UInt16?
+    public let mappedRawMaximum: UInt16?
+    public let mappedRawMaximumPercent: Float?
+    public let mappedBrightness: Float?
+    public let lastWrite: DDCBrightnessLastWrite?
+    public let lastError: String?
+}
+
 public final class DDCBrightnessController: BrightnessControlling, BrightnessControlResetting {
     private typealias IOAVService = CFTypeRef
     private typealias CGDisplayIOServicePortFn = @convention(c) (DisplayID) -> io_service_t
@@ -18,56 +43,25 @@ public final class DDCBrightnessController: BrightnessControlling, BrightnessCon
     }
 
     struct LuminanceMapping {
+        static let mappedMaximumRatio: Float = 0.38
+
         let reportedMaximum: UInt16
-        let range: DDCLuminanceRange
 
-        private var firstHalfMaximum: UInt16 {
-            max(1, reportedMaximum / 2)
+        var rawMaximum: UInt16 {
+            let rawMaximum = floor(Float(max(1, reportedMaximum)) * Self.mappedMaximumRatio)
+            return max(1, UInt16(rawMaximum))
         }
 
-        private var secondHalfMinimum: UInt16 {
-            min(reportedMaximum, firstHalfMaximum + 1)
-        }
-
-        private var rawOffset: UInt16 {
-            switch range {
-            case .full, .firstHalf:
-                return 0
-            case .secondHalf:
-                return secondHalfMinimum
-            }
-        }
-
-        private var rawSpan: UInt16 {
-            switch range {
-            case .full:
-                return max(1, reportedMaximum)
-            case .firstHalf:
-                return firstHalfMaximum
-            case .secondHalf:
-                return max(1, reportedMaximum - secondHalfMinimum)
-            }
-        }
-
-        var logicalMaximum: UInt16 {
-            rawSpan
+        var rawMaximumPercent: Float {
+            Float(rawMaximum) / Float(max(1, reportedMaximum))
         }
 
         func normalized(current: UInt16) -> Float {
-            switch range {
-            case .full:
-                return Float(min(current, reportedMaximum)) / Float(max(1, reportedMaximum))
-            case .firstHalf, .secondHalf:
-                if current >= secondHalfMinimum {
-                    return Float(min(current - secondHalfMinimum, reportedMaximum - secondHalfMinimum))
-                        / Float(max(1, reportedMaximum - secondHalfMinimum))
-                }
-                return Float(min(current, firstHalfMaximum)) / Float(firstHalfMaximum)
-            }
+            Float(min(current, rawMaximum)) / Float(rawMaximum)
         }
 
         func rawValue(for normalized: Float) -> UInt16 {
-            rawOffset + UInt16((Float(rawSpan) * min(max(normalized, 0), 1)).rounded())
+            UInt16((Float(rawMaximum) * min(max(normalized, 0), 1)).rounded())
         }
     }
 
@@ -91,7 +85,8 @@ public final class DDCBrightnessController: BrightnessControlling, BrightnessCon
     private var values: [DisplayID: Float] = [:]
     private var originalValues: [DisplayID: Float] = [:]
     private var arm64Services: [DisplayID: IOAVService] = [:]
-    private var luminanceRanges: [DisplayID: DDCLuminanceRange] = [:]
+    private var lastWrites: [DisplayID: DDCBrightnessLastWrite] = [:]
+    private var lastErrors: [DisplayID: String] = [:]
 
     public private(set) var lastError: String?
 
@@ -118,25 +113,36 @@ public final class DDCBrightnessController: BrightnessControlling, BrightnessCon
     }
 
     public func brightness(for displayID: DisplayID) -> Float? {
-        if let value = readArm64VCP(Self.luminanceCode, displayID: displayID) ?? readVCP(Self.luminanceCode, displayID: displayID),
-           value.maximum > 0 {
+        if let read = readVCPWithBackend(Self.luminanceCode, displayID: displayID), read.value.maximum > 0 {
+            let value = read.value
             maximumValues[displayID] = value.maximum
-            let normalized = luminanceMapping(for: displayID, reportedMaximum: value.maximum).normalized(current: value.current)
+            let normalized = luminanceMapping(reportedMaximum: value.maximum).normalized(current: value.current)
             values[displayID] = normalized
-            lastError = nil
+            clearError(for: displayID)
             return normalized
         }
 
-        if let value = ioDisplayBrightness(for: displayID) {
-            values[displayID] = value
-            return value
-        }
-
-        return values[displayID] ?? 1
+        recordError("DDC/CI read failed for displayID=\(displayID)", for: displayID)
+        return nil
     }
 
-    public func setLuminanceRange(_ range: DDCLuminanceRange, for displayID: DisplayID) {
-        luminanceRanges[displayID] = range
+    public func diagnostics(for displayID: DisplayID) -> DDCBrightnessDiagnostics {
+        let read = readVCPWithBackend(Self.luminanceCode, displayID: displayID)
+        let mapping = read.map { LuminanceMapping(reportedMaximum: $0.value.maximum) }
+        if let read {
+            maximumValues[displayID] = read.value.maximum
+        }
+
+        return DDCBrightnessDiagnostics(
+            readBackend: read?.backend,
+            rawCurrent: read?.value.current,
+            rawMaximum: read?.value.maximum,
+            mappedRawMaximum: mapping?.rawMaximum,
+            mappedRawMaximumPercent: mapping?.rawMaximumPercent,
+            mappedBrightness: read.map { LuminanceMapping(reportedMaximum: $0.value.maximum).normalized(current: $0.value.current) },
+            lastWrite: lastWrites[displayID],
+            lastError: lastErrors[displayID]
+        )
     }
 
     @discardableResult
@@ -148,7 +154,7 @@ public final class DDCBrightnessController: BrightnessControlling, BrightnessCon
 
     public func reset() {
         for (displayID, value) in Array(originalValues) {
-            if setHardwareBrightness(value, for: displayID, allowVirtualFallback: false) {
+            if setHardwareBrightness(value, for: displayID) {
                 originalValues.removeValue(forKey: displayID)
             }
         }
@@ -159,7 +165,7 @@ public final class DDCBrightnessController: BrightnessControlling, BrightnessCon
             return
         }
 
-        if setHardwareBrightness(originalValue, for: displayID, allowVirtualFallback: false) {
+        if setHardwareBrightness(originalValue, for: displayID) {
             originalValues.removeValue(forKey: displayID)
         }
     }
@@ -175,58 +181,79 @@ public final class DDCBrightnessController: BrightnessControlling, BrightnessCon
     }
 
     private func currentHardwareBrightness(for displayID: DisplayID) -> Float? {
-        if let value = readArm64VCP(Self.luminanceCode, displayID: displayID) ?? readVCP(Self.luminanceCode, displayID: displayID),
-           value.maximum > 0 {
+        if let read = readVCPWithBackend(Self.luminanceCode, displayID: displayID), read.value.maximum > 0 {
+            let value = read.value
             maximumValues[displayID] = value.maximum
-            let normalized = luminanceMapping(for: displayID, reportedMaximum: value.maximum).normalized(current: value.current)
+            let normalized = luminanceMapping(reportedMaximum: value.maximum).normalized(current: value.current)
             values[displayID] = normalized
             return normalized
         }
 
-        return ioDisplayBrightness(for: displayID)
+        return nil
     }
 
     @discardableResult
-    private func setHardwareBrightness(
-        _ brightness: Float,
-        for displayID: DisplayID,
-        allowVirtualFallback: Bool = true
-    ) -> Bool {
+    private func setHardwareBrightness(_ brightness: Float, for displayID: DisplayID) -> Bool {
         let value = min(max(brightness, 0), 1)
         let maximum = maximumValues[displayID]
-            ?? readArm64VCP(Self.luminanceCode, displayID: displayID)?.maximum
-            ?? readVCP(Self.luminanceCode, displayID: displayID)?.maximum
+            ?? readVCPWithBackend(Self.luminanceCode, displayID: displayID)?.value.maximum
             ?? 100
         if maximum > 0 {
             maximumValues[displayID] = maximum
-            let rawValue = luminanceMapping(for: displayID, reportedMaximum: maximum).rawValue(for: value)
-            if writeArm64VCP(Self.luminanceCode, value: rawValue, displayID: displayID)
-                || writeVCP(Self.luminanceCode, value: rawValue, displayID: displayID) {
+            let mapping = luminanceMapping(reportedMaximum: maximum)
+            let rawValue = mapping.rawValue(for: value)
+            let backend = writeVCPWithBackend(Self.luminanceCode, value: rawValue, displayID: displayID)
+            lastWrites[displayID] = DDCBrightnessLastWrite(
+                requestedBrightness: value,
+                rawValue: rawValue,
+                rawMaximum: mapping.rawMaximum,
+                reportedMaximum: maximum,
+                backend: backend,
+                succeeded: backend != nil
+            )
+            if backend != nil {
                 values[displayID] = value
-                lastError = nil
+                clearError(for: displayID)
                 return true
             }
         }
 
-        if setIODisplayBrightness(value, for: displayID) {
-            values[displayID] = value
-            lastError = nil
-            return true
-        }
-
-        lastError = "DDC/CI hardware write failed for displayID=\(displayID)"
-        if allowVirtualFallback {
-            values[displayID] = value
-            return true
-        }
+        recordError("DDC/CI hardware write failed for displayID=\(displayID)", for: displayID)
         return false
     }
 
-    private func luminanceMapping(for displayID: DisplayID, reportedMaximum: UInt16) -> LuminanceMapping {
-        LuminanceMapping(
-            reportedMaximum: reportedMaximum,
-            range: luminanceRanges[displayID] ?? .full
-        )
+    private func recordError(_ message: String, for displayID: DisplayID) {
+        lastErrors[displayID] = message
+        lastError = message
+    }
+
+    private func clearError(for displayID: DisplayID) {
+        lastErrors.removeValue(forKey: displayID)
+        lastError = lastErrors.values.first
+    }
+
+    private func luminanceMapping(reportedMaximum: UInt16) -> LuminanceMapping {
+        LuminanceMapping(reportedMaximum: reportedMaximum)
+    }
+
+    private func readVCPWithBackend(_ code: UInt8, displayID: DisplayID) -> (value: VCPValue, backend: DDCTransport)? {
+        if let value = readArm64VCP(code, displayID: displayID) {
+            return (value, .arm64AVService)
+        }
+        if let value = readVCP(code, displayID: displayID) {
+            return (value, .i2cFramebuffer)
+        }
+        return nil
+    }
+
+    private func writeVCPWithBackend(_ code: UInt8, value: UInt16, displayID: DisplayID) -> DDCTransport? {
+        if writeArm64VCP(code, value: value, displayID: displayID) {
+            return .arm64AVService
+        }
+        if writeVCP(code, value: value, displayID: displayID) {
+            return .i2cFramebuffer
+        }
+        return nil
     }
 
     private func readArm64VCP(_ code: UInt8, displayID: DisplayID) -> VCPValue? {
@@ -589,38 +616,6 @@ public final class DDCBrightnessController: BrightnessControlling, BrightnessCon
 
         let service = displayIOServicePort(displayID)
         return service == 0 ? nil : service
-    }
-
-    private func ioDisplayBrightness(for displayID: DisplayID) -> Float? {
-        guard let display = ioDisplay(for: displayID) else {
-            return nil
-        }
-
-        var value: Float = 0
-        guard IODisplayGetFloatParameter(display, 0, "brightness" as CFString, &value) == kIOReturnSuccess else {
-            return nil
-        }
-
-        return min(max(value, 0), 1)
-    }
-
-    private func setIODisplayBrightness(_ brightness: Float, for displayID: DisplayID) -> Bool {
-        guard let display = ioDisplay(for: displayID) else {
-            return false
-        }
-
-        let key = "brightness" as CFString
-        return IODisplaySetFloatParameter(display, 0, key, brightness) == kIOReturnSuccess
-            && IODisplayCommitParameters(display, 0) == kIOReturnSuccess
-    }
-
-    private func ioDisplay(for displayID: DisplayID) -> io_service_t? {
-        guard let framebuffer = framebufferService(for: displayID) else {
-            return nil
-        }
-
-        let display = IODisplayForFramebuffer(framebuffer, 0)
-        return display == 0 ? nil : display
     }
 
     private static func load<T>(_ handle: UnsafeMutableRawPointer?, _ symbol: String, as type: T.Type) -> T? {
