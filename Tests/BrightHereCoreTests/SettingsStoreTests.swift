@@ -68,6 +68,11 @@ struct SettingsStoreTests {
         #expect(settings.displayBrightnessControlModes.isEmpty)
     }
 
+    @Test("orders brightness control modes by default preference")
+    func ordersBrightnessControlModesByDefaultPreference() {
+        #expect(BrightnessControlMode.allCases == [.system, .gamma, .ddcCI, .overlay])
+    }
+
     @Test("uses display brightness control mode for external displays")
     func usesDisplayBrightnessControlModeForExternalDisplays() {
         var settings = AppSettings(brightnessControlMode: .gamma)
@@ -94,7 +99,7 @@ struct SettingsStoreTests {
             source: "test"
         )
 
-        #expect(settings.brightnessControlMode(for: external) == .gamma)
+        #expect(settings.brightnessControlMode(for: external) == .system)
         settings.setBrightnessControlMode(.ddcCI, for: external)
 
         #expect(settings.brightnessControlMode(for: external) == .ddcCI)

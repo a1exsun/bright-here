@@ -228,7 +228,7 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
             return
         }
 
-        let previous = model.settings.brightnessControlMode(for: display)
+        let previous = effectiveBrightnessControlMode(for: display, systemAvailable: systemAvailable)
         if previous != mode {
             brightnessControllers.reset(mode: previous, displayID: display.id)
         }
@@ -466,7 +466,7 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
 
         let configuredMode = model.settings.brightnessControlMode(for: display)
         if configuredMode == .system, !systemAvailable {
-            return .ddcCI
+            return .gamma
         }
         return configuredMode
     }
@@ -1091,6 +1091,12 @@ final class OverlayBrightnessController: @preconcurrency BrightnessControlling, 
         }
         windows.removeAll()
         values.removeAll()
+    }
+
+    func reset(displayID: DisplayID) {
+        windows[displayID]?.orderOut(nil)
+        windows.removeValue(forKey: displayID)
+        values.removeValue(forKey: displayID)
     }
 
     private func setOverlayOpacity(_ opacity: Float, for displayID: DisplayID) {

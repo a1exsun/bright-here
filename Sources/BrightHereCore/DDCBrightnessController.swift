@@ -5,7 +5,7 @@ import IOKit
 import IOKit.i2c
 import IOKit.graphics
 
-public final class DDCBrightnessController: BrightnessControlling {
+public final class DDCBrightnessController: BrightnessControlling, BrightnessControlResetting {
     private typealias IOAVService = CFTypeRef
     private typealias CGDisplayIOServicePortFn = @convention(c) (DisplayID) -> io_service_t
     private typealias IOAVServiceCreateWithServiceFn = @convention(c) (CFAllocator?, io_service_t) -> Unmanaged<IOAVService>?
@@ -35,6 +35,7 @@ public final class DDCBrightnessController: BrightnessControlling {
     private let ioAVServiceWriteI2C: IOAVServiceWriteI2CFn?
     private var maximumValues: [DisplayID: UInt16] = [:]
     private var values: [DisplayID: Float] = [:]
+    private var originalValues: [DisplayID: Float] = [:]
     private var arm64Services: [DisplayID: IOAVService] = [:]
 
     public private(set) var lastError: String?
@@ -82,6 +83,57 @@ public final class DDCBrightnessController: BrightnessControlling {
     @discardableResult
     public func setBrightness(_ brightness: Float, for displayID: DisplayID) -> Bool {
         let value = min(max(brightness, 0), 1)
+        rememberOriginalBrightnessIfNeeded(for: displayID)
+        return setHardwareBrightness(value, for: displayID)
+    }
+
+    public func reset() {
+        for (displayID, value) in Array(originalValues) {
+            if setHardwareBrightness(value, for: displayID, allowVirtualFallback: false) {
+                originalValues.removeValue(forKey: displayID)
+            }
+        }
+    }
+
+    public func reset(displayID: DisplayID) {
+        guard let originalValue = originalValues[displayID] else {
+            return
+        }
+
+        if setHardwareBrightness(originalValue, for: displayID, allowVirtualFallback: false) {
+            originalValues.removeValue(forKey: displayID)
+        }
+    }
+
+    private func rememberOriginalBrightnessIfNeeded(for displayID: DisplayID) {
+        guard originalValues[displayID] == nil else {
+            return
+        }
+
+        if let value = values[displayID] ?? currentHardwareBrightness(for: displayID) {
+            originalValues[displayID] = value
+        }
+    }
+
+    private func currentHardwareBrightness(for displayID: DisplayID) -> Float? {
+        if let value = readArm64VCP(Self.luminanceCode, displayID: displayID) ?? readVCP(Self.luminanceCode, displayID: displayID),
+           value.maximum > 0 {
+            maximumValues[displayID] = value.maximum
+            let normalized = Float(value.current) / Float(value.maximum)
+            values[displayID] = normalized
+            return normalized
+        }
+
+        return ioDisplayBrightness(for: displayID)
+    }
+
+    @discardableResult
+    private func setHardwareBrightness(
+        _ brightness: Float,
+        for displayID: DisplayID,
+        allowVirtualFallback: Bool = true
+    ) -> Bool {
+        let value = min(max(brightness, 0), 1)
         let maximum = maximumValues[displayID]
             ?? readArm64VCP(Self.luminanceCode, displayID: displayID)?.maximum
             ?? readVCP(Self.luminanceCode, displayID: displayID)?.maximum
@@ -103,9 +155,12 @@ public final class DDCBrightnessController: BrightnessControlling {
             return true
         }
 
-        values[displayID] = value
         lastError = "DDC/CI hardware write failed for displayID=\(displayID)"
-        return true
+        if allowVirtualFallback {
+            values[displayID] = value
+            return true
+        }
+        return false
     }
 
     private func readArm64VCP(_ code: UInt8, displayID: DisplayID) -> VCPValue? {
@@ -150,16 +205,21 @@ public final class DDCBrightnessController: BrightnessControlling {
             : Self.arm64DDCAddress << 1 ^ dataAddress
         packet[packet.count - 1] = arm64Checksum(seed: checksumSeed, data: packet, end: packet.count - 2)
 
+        let writeCycleCount = reply.isEmpty ? 1 : 2
         var success = false
         for _ in 0..<5 {
             let packetCount = packet.count
-            for _ in 0..<2 {
+            for _ in 0..<writeCycleCount {
                 usleep(10_000)
                 success = packet.withUnsafeMutableBufferPointer { buffer in
                     guard let base = buffer.baseAddress else {
                         return false
                     }
                     return ioAVServiceWriteI2C(service, UInt32(Self.arm64DDCAddress), UInt32(dataAddress), base, UInt32(packetCount)) == kIOReturnSuccess
+                }
+
+                if success, reply.isEmpty {
+                    return true
                 }
             }
 

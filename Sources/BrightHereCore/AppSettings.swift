@@ -37,7 +37,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
             return .system
         }
 
-        return displayBrightnessControlModes[display.settingsIdentity] ?? brightnessControlMode
+        return displayBrightnessControlModes[display.settingsIdentity] ?? .system
     }
 
     public mutating func setBrightnessControlMode(_ mode: BrightnessControlMode, for display: ManagedDisplay) {
