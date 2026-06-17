@@ -43,7 +43,7 @@ public final class DDCBrightnessController: BrightnessControlling, BrightnessCon
     }
 
     struct LuminanceMapping {
-        static let mappedMaximumRatio: Float = 0.38
+        static let mappedMaximumRatio: Float = 0.40
 
         let reportedMaximum: UInt16
 

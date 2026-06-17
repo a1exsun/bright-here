@@ -51,6 +51,10 @@ final class AppModel: ObservableObject {
         coordinator?.refreshBrightnessModeAvailability()
     }
 
+    func resetBrightnessControlsAndRefreshDisplays() {
+        coordinator?.resetBrightnessControlsAndRefreshDisplays()
+    }
+
     func setHotkeyListenerActive(_ active: Bool) {
         isHotkeyListenerActive = active
     }
@@ -128,6 +132,12 @@ private final class BrightnessControllerRegistry {
 
     func reset(mode: BrightnessControlMode, displayID: DisplayID) {
         (controller(for: mode) as? BrightnessControlResetting)?.reset(displayID: displayID)
+    }
+
+    func resetNonSystemModes() {
+        ddcCI.reset()
+        gamma.reset()
+        overlay.reset()
     }
 }
 
@@ -213,6 +223,12 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         }
 
         model.displayBrightnessModes = states
+    }
+
+    func resetBrightnessControlsAndRefreshDisplays() {
+        brightnessControllers.resetNonSystemModes()
+        model.runtimeStatus = "Brightness controls reset"
+        refreshBrightnessModeAvailability()
     }
 
     func setBrightnessControlMode(_ mode: BrightnessControlMode, for displayIdentity: String) {
@@ -1453,12 +1469,12 @@ struct SettingsView: View {
                     .font(.subheadline.weight(.semibold))
                 Spacer()
                 Button {
-                    model.refreshBrightnessModeAvailability()
+                    model.resetBrightnessControlsAndRefreshDisplays()
                 } label: {
                     Image(systemName: "arrow.clockwise")
                 }
                 .buttonStyle(.borderless)
-                .help("Refresh display capability")
+                .help("Reset DDC, Gamma, and Overlay, then refresh display capability")
             }
 
             if model.displayBrightnessModes.isEmpty {
