@@ -29,6 +29,9 @@ struct SettingsStoreTests {
             brightnessControlMode: .gamma,
             displayBrightnessControlModes: [
                 "vendor:1:product:2:serial:3": .ddcCI
+            ],
+            displayDDCLuminanceRanges: [
+                "vendor:1:product:2:serial:3": .firstHalf
             ]
         )
 
@@ -66,6 +69,7 @@ struct SettingsStoreTests {
 
         #expect(settings.brightnessControlMode == .system)
         #expect(settings.displayBrightnessControlModes.isEmpty)
+        #expect(settings.displayDDCLuminanceRanges.isEmpty)
     }
 
     @Test("orders brightness control modes by default preference")
@@ -104,6 +108,40 @@ struct SettingsStoreTests {
 
         #expect(settings.brightnessControlMode(for: external) == .ddcCI)
         #expect(settings.brightnessControlMode(for: builtin) == .system)
+    }
+
+    @Test("uses DDC luminance range for external displays")
+    func usesDDCLuminanceRangeForExternalDisplays() {
+        var settings = AppSettings()
+        let external = ManagedDisplay(
+            index: 1,
+            id: 123,
+            bounds: .zero,
+            isMain: true,
+            isBuiltin: false,
+            isActive: true,
+            isOnline: true,
+            isAsleep: false,
+            source: "test"
+        )
+        let builtin = ManagedDisplay(
+            index: 2,
+            id: 456,
+            bounds: .zero,
+            isMain: false,
+            isBuiltin: true,
+            isActive: true,
+            isOnline: true,
+            isAsleep: false,
+            source: "test"
+        )
+
+        #expect(settings.ddcLuminanceRange(for: external) == .full)
+        settings.setDDCLuminanceRange(.secondHalf, for: external)
+        settings.setDDCLuminanceRange(.firstHalf, for: builtin)
+
+        #expect(settings.ddcLuminanceRange(for: external) == .secondHalf)
+        #expect(settings.ddcLuminanceRange(for: builtin) == .full)
     }
 
     @Test("migrates legacy default brightness step")

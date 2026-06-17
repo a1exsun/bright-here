@@ -12,6 +12,7 @@ struct DisplayBrightnessModeState: Identifiable, Equatable {
     let displayName: String
     let isSystemAvailable: Bool
     let selectedMode: BrightnessControlMode
+    let ddcLuminanceRange: DDCLuminanceRange
 }
 
 @MainActor
@@ -40,6 +41,10 @@ final class AppModel: ObservableObject {
 
     func setBrightnessControlMode(_ mode: BrightnessControlMode, for displayIdentity: String) {
         coordinator?.setBrightnessControlMode(mode, for: displayIdentity)
+    }
+
+    func setDDCLuminanceRange(_ range: DDCLuminanceRange, for displayIdentity: String) {
+        coordinator?.setDDCLuminanceRange(range, for: displayIdentity)
     }
 
     func refreshPermissionStatus() {
@@ -203,12 +208,15 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         let states = externalDisplays().map { display in
             let systemAvailable = brightnessControllers.system.canControl(displayID: display.id)
             let selectedMode = effectiveBrightnessControlMode(for: display, systemAvailable: systemAvailable)
+            let ddcRange = model.settings.ddcLuminanceRange(for: display)
+            brightnessControllers.ddcCI.setLuminanceRange(ddcRange, for: display.id)
             return DisplayBrightnessModeState(
                 id: display.settingsIdentity,
                 displayID: display.id,
                 displayName: display.friendlyName,
                 isSystemAvailable: systemAvailable,
-                selectedMode: selectedMode
+                selectedMode: selectedMode,
+                ddcLuminanceRange: ddcRange
             )
         }
 
@@ -234,6 +242,18 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         }
 
         model.settings.setBrightnessControlMode(mode, for: display)
+        model.save()
+        refreshBrightnessModeAvailability()
+    }
+
+    func setDDCLuminanceRange(_ range: DDCLuminanceRange, for displayIdentity: String) {
+        guard let model,
+              let display = externalDisplays().first(where: { $0.settingsIdentity == displayIdentity }) else {
+            return
+        }
+
+        model.settings.setDDCLuminanceRange(range, for: display)
+        brightnessControllers.ddcCI.setLuminanceRange(range, for: display.id)
         model.save()
         refreshBrightnessModeAvailability()
     }
@@ -381,6 +401,12 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
             model.runtimeStatus = "System brightness is unavailable for \(targetDisplay.friendlyName)"
             log.error("\(source) system brightness unavailable displayID=\(targetDisplay.id) name=\(targetDisplay.friendlyName)")
             return nil
+        }
+        if mode == .ddcCI {
+            brightnessControllers.ddcCI.setLuminanceRange(
+                model.settings.ddcLuminanceRange(for: targetDisplay),
+                for: targetDisplay.id
+            )
         }
 
         let brightness = brightnessControllers.controller(for: mode)
@@ -1480,6 +1506,16 @@ struct SettingsView: View {
                 isSystemAvailable: state.isSystemAvailable
             )
             .frame(maxWidth: .infinity)
+
+            if state.selectedMode == .ddcCI {
+                HStack(spacing: 8) {
+                    Text("DDC range")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    DDCLuminanceRangeSegmentedControl(selection: ddcRangeBinding(for: state))
+                        .frame(maxWidth: .infinity)
+                }
+            }
         }
     }
 
@@ -1490,6 +1526,17 @@ struct SettingsView: View {
             },
             set: { mode in
                 model.setBrightnessControlMode(mode, for: state.id)
+            }
+        )
+    }
+
+    private func ddcRangeBinding(for state: DisplayBrightnessModeState) -> Binding<DDCLuminanceRange> {
+        Binding(
+            get: {
+                model.displayBrightnessModes.first(where: { $0.id == state.id })?.ddcLuminanceRange ?? state.ddcLuminanceRange
+            },
+            set: { range in
+                model.setDDCLuminanceRange(range, for: state.id)
             }
         )
     }
@@ -1547,6 +1594,19 @@ private extension BrightnessControlMode {
     }
 }
 
+private extension DDCLuminanceRange {
+    var settingsTitle: String {
+        switch self {
+        case .full:
+            "Full"
+        case .firstHalf:
+            "First"
+        case .secondHalf:
+            "Second"
+        }
+    }
+}
+
 private struct BrightnessModeSegmentedControl: NSViewRepresentable {
     @Binding var selection: BrightnessControlMode
     let isSystemAvailable: Bool
@@ -1594,6 +1654,56 @@ private struct BrightnessModeSegmentedControl: NSViewRepresentable {
                 return
             }
             parent.selection = BrightnessControlMode.allCases[index]
+        }
+    }
+}
+
+private struct DDCLuminanceRangeSegmentedControl: NSViewRepresentable {
+    @Binding var selection: DDCLuminanceRange
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    func makeNSView(context: Context) -> NSSegmentedControl {
+        let control = NSSegmentedControl(
+            labels: DDCLuminanceRange.allCases.map(\.settingsTitle),
+            trackingMode: .selectOne,
+            target: context.coordinator,
+            action: #selector(Coordinator.changed(_:))
+        )
+        control.segmentStyle = .automatic
+        control.segmentDistribution = .fillEqually
+        control.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        control.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return control
+    }
+
+    func updateNSView(_ control: NSSegmentedControl, context: Context) {
+        context.coordinator.parent = self
+        control.segmentDistribution = .fillEqually
+
+        for (index, range) in DDCLuminanceRange.allCases.enumerated() {
+            control.setLabel(range.settingsTitle, forSegment: index)
+            control.setEnabled(true, forSegment: index)
+        }
+
+        control.selectedSegment = DDCLuminanceRange.allCases.firstIndex(of: selection) ?? 0
+    }
+
+    final class Coordinator: NSObject {
+        var parent: DDCLuminanceRangeSegmentedControl
+
+        init(_ parent: DDCLuminanceRangeSegmentedControl) {
+            self.parent = parent
+        }
+
+        @MainActor @objc func changed(_ sender: NSSegmentedControl) {
+            let index = sender.selectedSegment
+            guard DDCLuminanceRange.allCases.indices.contains(index) else {
+                return
+            }
+            parent.selection = DDCLuminanceRange.allCases[index]
         }
     }
 }

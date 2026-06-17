@@ -19,28 +19,55 @@ public final class DDCBrightnessController: BrightnessControlling, BrightnessCon
 
     struct LuminanceMapping {
         let reportedMaximum: UInt16
-        let repeatsAtHalfRange: Bool
+        let range: DDCLuminanceRange
+
+        private var firstHalfMaximum: UInt16 {
+            max(1, reportedMaximum / 2)
+        }
+
+        private var secondHalfMinimum: UInt16 {
+            min(reportedMaximum, firstHalfMaximum + 1)
+        }
+
+        private var rawOffset: UInt16 {
+            switch range {
+            case .full, .firstHalf:
+                return 0
+            case .secondHalf:
+                return secondHalfMinimum
+            }
+        }
+
+        private var rawSpan: UInt16 {
+            switch range {
+            case .full:
+                return max(1, reportedMaximum)
+            case .firstHalf:
+                return firstHalfMaximum
+            case .secondHalf:
+                return max(1, reportedMaximum - secondHalfMinimum)
+            }
+        }
 
         var logicalMaximum: UInt16 {
-            guard repeatsAtHalfRange else {
-                return reportedMaximum
-            }
-            return max(1, reportedMaximum / 2)
+            rawSpan
         }
 
         func normalized(current: UInt16) -> Float {
-            let maximum = logicalMaximum
-            let logicalCurrent: UInt16
-            if repeatsAtHalfRange, current > maximum {
-                logicalCurrent = min(current - maximum, maximum)
-            } else {
-                logicalCurrent = min(current, maximum)
+            switch range {
+            case .full:
+                return Float(min(current, reportedMaximum)) / Float(max(1, reportedMaximum))
+            case .firstHalf, .secondHalf:
+                if current >= secondHalfMinimum {
+                    return Float(min(current - secondHalfMinimum, reportedMaximum - secondHalfMinimum))
+                        / Float(max(1, reportedMaximum - secondHalfMinimum))
+                }
+                return Float(min(current, firstHalfMaximum)) / Float(firstHalfMaximum)
             }
-            return Float(logicalCurrent) / Float(maximum)
         }
 
         func rawValue(for normalized: Float) -> UInt16 {
-            UInt16((Float(logicalMaximum) * min(max(normalized, 0), 1)).rounded())
+            rawOffset + UInt16((Float(rawSpan) * min(max(normalized, 0), 1)).rounded())
         }
     }
 
@@ -64,6 +91,7 @@ public final class DDCBrightnessController: BrightnessControlling, BrightnessCon
     private var values: [DisplayID: Float] = [:]
     private var originalValues: [DisplayID: Float] = [:]
     private var arm64Services: [DisplayID: IOAVService] = [:]
+    private var luminanceRanges: [DisplayID: DDCLuminanceRange] = [:]
 
     public private(set) var lastError: String?
 
@@ -105,6 +133,10 @@ public final class DDCBrightnessController: BrightnessControlling, BrightnessCon
         }
 
         return values[displayID] ?? 1
+    }
+
+    public func setLuminanceRange(_ range: DDCLuminanceRange, for displayID: DisplayID) {
+        luminanceRanges[displayID] = range
     }
 
     @discardableResult
@@ -193,12 +225,8 @@ public final class DDCBrightnessController: BrightnessControlling, BrightnessCon
     private func luminanceMapping(for displayID: DisplayID, reportedMaximum: UInt16) -> LuminanceMapping {
         LuminanceMapping(
             reportedMaximum: reportedMaximum,
-            repeatsAtHalfRange: usesRepeatedHalfRangeLuminanceQuirk(displayID: displayID)
+            range: luminanceRanges[displayID] ?? .full
         )
-    }
-
-    private func usesRepeatedHalfRangeLuminanceQuirk(displayID: DisplayID) -> Bool {
-        CGDisplayVendorNumber(displayID) == 16652 && CGDisplayModelNumber(displayID) == 49748
     }
 
     private func readArm64VCP(_ code: UInt8, displayID: DisplayID) -> VCPValue? {
