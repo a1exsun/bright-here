@@ -18,10 +18,10 @@ fi
 
 RELEASE_NOTES="## What's Changed
 
-- Rebuild the brightness HUD content with native SwiftUI controls.
-- Use the native SwiftUI Slider in both the main panel and HUD.
-- Keep macOS 15 compatibility while simplifying fallback code.
-- Adjust the HUD glass tint to pure black at 22% opacity.
+- Add per-display brightness control modes for external displays: System, Gamma, DDC/CI, and Overlay.
+- Restore DDC, Gamma, and Overlay state when refreshing display capabilities.
+- Simplify DDC/CI control and reset behavior, including raw DDC value restoration.
+- Clean up the debug panel and keep it focused on pointer/display routing diagnostics.
 
 ## Install
 
