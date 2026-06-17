@@ -17,6 +17,33 @@ public final class DDCBrightnessController: BrightnessControlling, BrightnessCon
         let maximum: UInt16
     }
 
+    struct LuminanceMapping {
+        let reportedMaximum: UInt16
+        let repeatsAtHalfRange: Bool
+
+        var logicalMaximum: UInt16 {
+            guard repeatsAtHalfRange else {
+                return reportedMaximum
+            }
+            return max(1, reportedMaximum / 2)
+        }
+
+        func normalized(current: UInt16) -> Float {
+            let maximum = logicalMaximum
+            let logicalCurrent: UInt16
+            if repeatsAtHalfRange, current > maximum {
+                logicalCurrent = min(current - maximum, maximum)
+            } else {
+                logicalCurrent = min(current, maximum)
+            }
+            return Float(logicalCurrent) / Float(maximum)
+        }
+
+        func rawValue(for normalized: Float) -> UInt16 {
+            UInt16((Float(logicalMaximum) * min(max(normalized, 0), 1)).rounded())
+        }
+    }
+
     private struct Arm64ServiceCandidate {
         let productName: String
         let productID: Int
@@ -66,7 +93,7 @@ public final class DDCBrightnessController: BrightnessControlling, BrightnessCon
         if let value = readArm64VCP(Self.luminanceCode, displayID: displayID) ?? readVCP(Self.luminanceCode, displayID: displayID),
            value.maximum > 0 {
             maximumValues[displayID] = value.maximum
-            let normalized = Float(value.current) / Float(value.maximum)
+            let normalized = luminanceMapping(for: displayID, reportedMaximum: value.maximum).normalized(current: value.current)
             values[displayID] = normalized
             lastError = nil
             return normalized
@@ -119,7 +146,7 @@ public final class DDCBrightnessController: BrightnessControlling, BrightnessCon
         if let value = readArm64VCP(Self.luminanceCode, displayID: displayID) ?? readVCP(Self.luminanceCode, displayID: displayID),
            value.maximum > 0 {
             maximumValues[displayID] = value.maximum
-            let normalized = Float(value.current) / Float(value.maximum)
+            let normalized = luminanceMapping(for: displayID, reportedMaximum: value.maximum).normalized(current: value.current)
             values[displayID] = normalized
             return normalized
         }
@@ -140,7 +167,7 @@ public final class DDCBrightnessController: BrightnessControlling, BrightnessCon
             ?? 100
         if maximum > 0 {
             maximumValues[displayID] = maximum
-            let rawValue = UInt16((Float(maximum) * value).rounded())
+            let rawValue = luminanceMapping(for: displayID, reportedMaximum: maximum).rawValue(for: value)
             if writeArm64VCP(Self.luminanceCode, value: rawValue, displayID: displayID)
                 || writeVCP(Self.luminanceCode, value: rawValue, displayID: displayID) {
                 values[displayID] = value
@@ -161,6 +188,17 @@ public final class DDCBrightnessController: BrightnessControlling, BrightnessCon
             return true
         }
         return false
+    }
+
+    private func luminanceMapping(for displayID: DisplayID, reportedMaximum: UInt16) -> LuminanceMapping {
+        LuminanceMapping(
+            reportedMaximum: reportedMaximum,
+            repeatsAtHalfRange: usesRepeatedHalfRangeLuminanceQuirk(displayID: displayID)
+        )
+    }
+
+    private func usesRepeatedHalfRangeLuminanceQuirk(displayID: DisplayID) -> Bool {
+        CGDisplayVendorNumber(displayID) == 16652 && CGDisplayModelNumber(displayID) == 49748
     }
 
     private func readArm64VCP(_ code: UInt8, displayID: DisplayID) -> VCPValue? {
@@ -205,7 +243,7 @@ public final class DDCBrightnessController: BrightnessControlling, BrightnessCon
             : Self.arm64DDCAddress << 1 ^ dataAddress
         packet[packet.count - 1] = arm64Checksum(seed: checksumSeed, data: packet, end: packet.count - 2)
 
-        let writeCycleCount = reply.isEmpty ? 1 : 2
+        let writeCycleCount = 2
         var success = false
         for _ in 0..<5 {
             let packetCount = packet.count
@@ -218,9 +256,6 @@ public final class DDCBrightnessController: BrightnessControlling, BrightnessCon
                     return ioAVServiceWriteI2C(service, UInt32(Self.arm64DDCAddress), UInt32(dataAddress), base, UInt32(packetCount)) == kIOReturnSuccess
                 }
 
-                if success, reply.isEmpty {
-                    return true
-                }
             }
 
             if !reply.isEmpty, let ioAVServiceReadI2C {
