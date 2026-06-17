@@ -29,18 +29,7 @@ public final class GammaBrightnessController: BrightnessControlling, BrightnessC
         let original = originalFormula(for: displayID)
 
         if value >= 0.995 {
-            let restored = CGSetDisplayTransferByFormula(
-                displayID,
-                original.redMin,
-                original.redMax,
-                original.redGamma,
-                original.greenMin,
-                original.greenMax,
-                original.greenGamma,
-                original.blueMin,
-                original.blueMax,
-                original.blueGamma
-            ) == .success
+            let restored = restoreOriginalFormula(for: displayID)
             if restored {
                 values[displayID] = 1
             }
@@ -67,15 +56,35 @@ public final class GammaBrightnessController: BrightnessControlling, BrightnessC
 
     public func reset() {
         for displayID in Array(originalFormulas.keys) {
-            _ = setBrightness(1, for: displayID)
+            _ = restoreOriginalFormula(for: displayID)
         }
+        originalFormulas.removeAll()
         values.removeAll()
     }
 
     public func reset(displayID: DisplayID) {
-        _ = setBrightness(1, for: displayID)
+        _ = restoreOriginalFormula(for: displayID)
         originalFormulas.removeValue(forKey: displayID)
         values.removeValue(forKey: displayID)
+    }
+
+    private func restoreOriginalFormula(for displayID: DisplayID) -> Bool {
+        guard let original = originalFormulas[displayID] else {
+            return true
+        }
+
+        return CGSetDisplayTransferByFormula(
+            displayID,
+            original.redMin,
+            original.redMax,
+            original.redGamma,
+            original.greenMin,
+            original.greenMax,
+            original.greenGamma,
+            original.blueMin,
+            original.blueMax,
+            original.blueGamma
+        ) == .success
     }
 
     private func originalFormula(for displayID: DisplayID) -> TransferFormula {

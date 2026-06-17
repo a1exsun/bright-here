@@ -3,15 +3,15 @@ import Testing
 
 @Suite("DDC luminance mapping")
 struct DDCLuminanceMappingTests {
-    @Test("maps full logical brightness into the first 40 percent of raw DDC luminance")
-    func mapsLogicalBrightnessIntoFirstFortyPercent() {
+    @Test("maps full logical brightness into the first 38 percent of raw DDC luminance")
+    func mapsLogicalBrightnessIntoFirstThirtyEightPercent() {
         let mapping = DDCBrightnessController.LuminanceMapping(reportedMaximum: 100)
 
         #expect(mapping.rawValue(for: 0) == 0)
-        #expect(mapping.rawValue(for: 0.5) == 20)
-        #expect(mapping.rawValue(for: 1) == 40)
-        #expect(mapping.rawMaximum == 40)
-        #expect(mapping.rawMaximumPercent == 0.40)
+        #expect(mapping.rawValue(for: 0.5) == 19)
+        #expect(mapping.rawValue(for: 1) == 38)
+        #expect(mapping.rawMaximum == 38)
+        #expect(mapping.rawMaximumPercent == 0.38)
     }
 
     @Test("clamps raw readback above the mapped DDC ceiling")
@@ -19,18 +19,18 @@ struct DDCLuminanceMappingTests {
         let mapping = DDCBrightnessController.LuminanceMapping(reportedMaximum: 100)
 
         #expect(mapping.normalized(current: 0) == 0)
-        #expect(mapping.normalized(current: 20) == 0.5)
-        #expect(mapping.normalized(current: 40) == 1)
-        #expect(mapping.normalized(current: 41) == 1)
+        #expect(mapping.normalized(current: 19) == 0.5)
+        #expect(mapping.normalized(current: 38) == 1)
+        #expect(mapping.normalized(current: 39) == 1)
         #expect(mapping.normalized(current: 100) == 1)
     }
 
-    @Test("does not exceed 40 percent for non-100 reported maximums")
-    func doesNotExceedFortyPercentForOtherMaximums() {
+    @Test("does not exceed 38 percent for non-100 reported maximums")
+    func doesNotExceedThirtyEightPercentForOtherMaximums() {
         let mapping = DDCBrightnessController.LuminanceMapping(reportedMaximum: 255)
 
-        #expect(mapping.rawMaximum == 102)
-        #expect(mapping.rawValue(for: 1) == 102)
-        #expect(mapping.rawMaximumPercent <= 0.40)
+        #expect(mapping.rawMaximum == 96)
+        #expect(mapping.rawValue(for: 1) == 96)
+        #expect(mapping.rawMaximumPercent <= 0.38)
     }
 }

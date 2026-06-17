@@ -277,8 +277,7 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
             let view = DebugView(model: model, viewModel: DebugViewModel(
                 displayProvider: self.displayProvider,
                 pointerLocator: self.pointerLocator,
-                brightness: self.brightnessControllerForCurrentPointerDisplay(),
-                ddcBrightness: self.brightnessControllers.ddcCI
+                brightness: self.brightnessControllerForCurrentPointerDisplay()
             ))
             let hosting = NSHostingView(rootView: view)
             let window = NSWindow(
@@ -1252,19 +1251,15 @@ final class SparkleUpdateController: NSObject, SPUUpdaterDelegate {
 @MainActor
 final class DebugViewModel: ObservableObject {
     @Published var diagnostics: PointerDiagnostics
-    @Published var ddcDiagnostics: [DisplayID: DDCBrightnessDiagnostics] = [:]
     @Published var nsEventMouseLocation: CGPoint = .zero
 
     private let collector: DiagnosticsCollector
-    private let ddcBrightness: DDCBrightnessController
 
     init(
         displayProvider: DisplayProviding,
         pointerLocator: PointerLocating,
-        brightness: BrightnessControlling,
-        ddcBrightness: DDCBrightnessController
+        brightness: BrightnessControlling
     ) {
-        self.ddcBrightness = ddcBrightness
         collector = DiagnosticsCollector(
             displayProvider: displayProvider,
             pointerLocator: pointerLocator,
@@ -1277,11 +1272,6 @@ final class DebugViewModel: ObservableObject {
     func refresh() {
         let snapshot = collector.snapshot()
         diagnostics = snapshot
-        ddcDiagnostics = Dictionary(
-            uniqueKeysWithValues: snapshot.displays
-                .filter { !$0.display.isBuiltin }
-                .map { ($0.display.id, ddcBrightness.diagnostics(for: $0.display.id)) }
-        )
         nsEventMouseLocation = NSEvent.mouseLocation
     }
 }
@@ -1719,18 +1709,11 @@ struct DebugView: View {
                         }
                     }
                     row("id", "\(snapshot.display.id)")
-                    row("cg identity", displayIdentityText(for: snapshot.display.id))
                     row("control mode", controlModeText(for: snapshot.display))
                     row("bounds", DiagnosticsFormatter.rect(snapshot.display.bounds))
-                    row("display mode", displayModeText(for: snapshot.display.id))
-                    row("color space", colorSpaceText(for: snapshot.display.id))
-                    row("edr", edrText(for: snapshot.display.id))
                     row("brightness", DiagnosticsFormatter.brightness(snapshot.brightness))
                     row("contains CG pointer", snapshot.containsPointer ? "yes" : "no")
                     row("roles", snapshot.display.roleDescription.isEmpty ? "n/a" : snapshot.display.roleDescription)
-                    if !snapshot.display.isBuiltin {
-                        ddcSection(for: snapshot.display.id)
-                    }
                 }
                 .padding(12)
                 .background(.background, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -1748,150 +1731,6 @@ struct DebugView: View {
         }
 
         return model.displayBrightnessModes.first(where: { $0.displayID == display.id })?.selectedMode.settingsTitle ?? "n/a"
-    }
-
-    private func displayIdentityText(for displayID: DisplayID) -> String {
-        "vendor \(CGDisplayVendorNumber(displayID)), product \(CGDisplayModelNumber(displayID)), serial \(CGDisplaySerialNumber(displayID))"
-    }
-
-    private func displayModeText(for displayID: DisplayID) -> String {
-        guard let mode = CGDisplayCopyDisplayMode(displayID) else {
-            return "n/a"
-        }
-
-        let refresh = mode.refreshRate > 0 ? String(format: "@ %.2fHz", mode.refreshRate) : "@ n/a"
-        return "\(mode.width)x\(mode.height) \(refresh), pixels \(mode.pixelWidth)x\(mode.pixelHeight)"
-    }
-
-    private func colorSpaceText(for displayID: DisplayID) -> String {
-        let colorSpace = CGDisplayCopyColorSpace(displayID)
-        return colorSpace.name as String? ?? "unnamed"
-    }
-
-    private func edrText(for displayID: DisplayID) -> String {
-        guard let screen = screen(for: displayID) else {
-            return "n/a"
-        }
-
-        return String(
-            format: "current %.2f, potential %.2f, reference %.2f",
-            screen.maximumExtendedDynamicRangeColorComponentValue,
-            screen.maximumPotentialExtendedDynamicRangeColorComponentValue,
-            screen.maximumReferenceExtendedDynamicRangeColorComponentValue
-        )
-    }
-
-    private func screen(for displayID: DisplayID) -> NSScreen? {
-        NSScreen.screens.first { screen in
-            guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
-                return false
-            }
-            return number.uint32Value == displayID
-        }
-    }
-
-    @ViewBuilder
-    private func ddcSection(for displayID: DisplayID) -> some View {
-        if let diagnostics = viewModel.ddcDiagnostics[displayID] {
-            Divider()
-                .padding(.vertical, 3)
-            Text("DDC/CI")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-            row("ddc read backend", diagnostics.readBackend?.rawValue ?? "n/a")
-            row("ddc raw current", rawPair(current: diagnostics.rawCurrent, maximum: diagnostics.rawMaximum))
-            row("ddc mapped ceiling", mappedCeilingText(diagnostics))
-            row("ddc mapped value", DiagnosticsFormatter.brightness(diagnostics.mappedBrightness))
-            row("ddc transports", transportReadbacksText(diagnostics.transportReadbacks))
-            row("ddc vcp probes", vcpFeatureReadbacksText(diagnostics.vcpFeatureReadbacks))
-            row("ddc last write", lastWriteText(diagnostics.lastWrite))
-            row("ddc write readback", lastWriteReadbackText(diagnostics.lastWrite))
-            row("ddc last error", diagnostics.lastError ?? "n/a")
-        }
-    }
-
-    private func rawPair(current: UInt16?, maximum: UInt16?) -> String {
-        guard let current, let maximum else {
-            return "n/a"
-        }
-        return "\(current) / \(maximum)"
-    }
-
-    private func mappedCeilingText(_ diagnostics: DDCBrightnessDiagnostics) -> String {
-        guard let rawMaximum = diagnostics.mappedRawMaximum,
-              let maximum = diagnostics.rawMaximum,
-              let percent = diagnostics.mappedRawMaximumPercent else {
-            return "n/a"
-        }
-        return "\(rawMaximum) / \(maximum) (\(String(format: "%.1f%%", percent * 100)))"
-    }
-
-    private func lastWriteText(_ write: DDCBrightnessLastWrite?) -> String {
-        guard let write else {
-            return "n/a"
-        }
-
-        let status = write.succeeded ? "ok" : "failed"
-        let backend = write.backend?.rawValue ?? "n/a"
-        return "\(String(format: "%.1f%%", write.requestedBrightness * 100)) -> raw \(write.rawValue) / \(write.rawMaximum) of \(write.reportedMaximum), \(backend), \(status)"
-    }
-
-    private func lastWriteReadbackText(_ write: DDCBrightnessLastWrite?) -> String {
-        guard let write,
-              let current = write.readbackRawCurrent,
-              let maximum = write.readbackRawMaximum else {
-            return "n/a"
-        }
-
-        return "\(write.readbackBackend?.rawValue ?? "n/a"): \(current) / \(maximum)"
-    }
-
-    private func transportReadbacksText(_ readbacks: [DDCTransportReadback]) -> String {
-        guard !readbacks.isEmpty else {
-            return "n/a"
-        }
-
-        return readbacks
-            .map { readback in
-                guard let current = readback.rawCurrent,
-                      let maximum = readback.rawMaximum else {
-                    return "\(readback.backend.rawValue): n/a"
-                }
-                return "\(readback.backend.rawValue): \(current)/\(maximum)"
-            }
-            .joined(separator: "; ")
-    }
-
-    private func vcpFeatureReadbacksText(_ readbacks: [DDCVCPFeatureReadback]) -> String {
-        guard !readbacks.isEmpty else {
-            return "n/a"
-        }
-
-        return readbacks
-            .map { readback in
-                let label = vcpFeatureLabel(readback.code)
-                guard let current = readback.rawCurrent,
-                      let maximum = readback.rawMaximum else {
-                    return "\(label): n/a"
-                }
-                return "\(label): \(current)/\(maximum) via \(readback.backend?.rawValue ?? "n/a")"
-            }
-            .joined(separator: "; ")
-    }
-
-    private func vcpFeatureLabel(_ code: UInt8) -> String {
-        switch code {
-        case 0x10:
-            return "0x10 luminance"
-        case 0x12:
-            return "0x12 contrast"
-        case 0x13:
-            return "0x13 backlight"
-        case 0xD6:
-            return "0xD6 power"
-        default:
-            return String(format: "0x%02X", code)
-        }
     }
 
     private func row(_ title: String, _ value: String) -> some View {
